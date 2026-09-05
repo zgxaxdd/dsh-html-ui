@@ -167,7 +167,6 @@
     var assetsBase = options.assetsBase || (win.__dshHtmlUiAssetsBase || "/plugins/dsh-html-ui/assets/katex/");
     var texRenderer = options.texRenderer || null;
     var themeProvider = options.themeProvider || null;
-    var sourceViewRenderer = options.sourceViewRenderer || null;
     var dict = options.locale || LOCALES.zh;
     var debug = !!options.debug;
     var onError = options.onError || null;
@@ -467,12 +466,12 @@
       if (opts.sourceOnly) {
         var c = doc.createElement("div");
         c.className = "dsh-html-ui-wrap";
-        var ui = makeToolbar();
-        ui.lbl.textContent = dict.toolbar.sourceOnly;
+        var soUi = makeToolbar();
+        soUi.lbl.textContent = dict.toolbar.sourceOnly;
         var warn = doc.createElement("div");
         warn.className = "dsh-html-ui-warn";
         warn.textContent = dict.oversized.warn;
-        c.appendChild(ui.bar);
+        c.appendChild(soUi.bar);
         c.appendChild(warn);
         block.after(c);
         var soMount = {
@@ -480,7 +479,7 @@
           block,
           container: c,
           iframe: null,
-          ui,
+          ui: soUi,
           view: null,
           raw,
           lastRaw: raw,
@@ -780,6 +779,10 @@
       setTheme: function() {
         invalidateTheme();
       },
+      setAssetsBase: function(b) {
+        assetsBase = b || assetsBase;
+        api.resetKatex();
+      },
       disable: function() {
         if (disposed) return;
         disposed = true;
@@ -809,6 +812,12 @@
       }
     };
     var disposed = false;
+    try {
+      injectStyle();
+    } catch (e) {
+      dbg(e);
+    }
+    setupThemeFollow();
     return api;
   }
 

@@ -71,7 +71,6 @@ export function createRenderer(options = {}) {
   var assetsBase = options.assetsBase || (win.__dshHtmlUiAssetsBase || '/plugins/dsh-html-ui/assets/katex/')
   var texRenderer = options.texRenderer || null
   var themeProvider = options.themeProvider || null   // () => {bg,fg}
-  var sourceViewRenderer = options.sourceViewRenderer || null
   var dict = options.locale || LOCALES.zh
   var debug = !!options.debug
   var onError = options.onError || null
@@ -392,17 +391,17 @@ export function createRenderer(options = {}) {
       /* 仅源码视图：工具栏 + 警告条，不建 iframe；仍纳入生命周期。 */
       var c = doc.createElement('div')
       c.className = 'dsh-html-ui-wrap'
-      var ui = makeToolbar()
-      ui.lbl.textContent = dict.toolbar.sourceOnly
+      var soUi = makeToolbar()
+      soUi.lbl.textContent = dict.toolbar.sourceOnly
       var warn = doc.createElement('div')
       warn.className = 'dsh-html-ui-warn'
       warn.textContent = dict.oversized.warn
-      c.appendChild(ui.bar)
+      c.appendChild(soUi.bar)
       c.appendChild(warn)
       block.after(c)
       var soMount = {
         id: ++mountSeq,
-        block, container: c, iframe: null, ui, view: null,
+        block, container: c, iframe: null, ui: soUi, view: null,
         raw, lastRaw: raw, lastBody: null, lastCss: null,
         settled: true, truncated: false, sourceView: true, oversized: true,
         _detached: false, _enriching: false, _pending: false,
@@ -644,6 +643,7 @@ export function createRenderer(options = {}) {
     },
     setLocale: function (l) { dict = l || LOCALES.zh },
     setTheme: function () { invalidateTheme() },
+    setAssetsBase: function (b) { assetsBase = b || assetsBase; api.resetKatex() },
     disable: function () {
       if (disposed) return
       disposed = true
@@ -655,6 +655,10 @@ export function createRenderer(options = {}) {
     },
   }
   var disposed = false
+
+  /* 启动：注入工具栏样式 + 主题跟随（内核默认行为）。 */
+  try { injectStyle() } catch (e) { dbg(e) }
+  setupThemeFollow()
 
   return api
 }
