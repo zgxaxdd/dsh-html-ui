@@ -173,6 +173,39 @@ test('F1 regression: settle renders iframe; source toggle restores block (决策
   expect(back).toBe('block')
 })
 
+test('决策5 regress: source mode toolbar visible & click-back works (bug: no preview option)', async ({ page }) => {
+  await boot(page)
+  await page.click('#add-fence')
+  await page.waitForTimeout(150)
+  expect(await page.evaluate(() => window.__stats().iframes)).toBe(1)
+  /* 切源码（dispatchEvent 绕过 iframe 指针拦截） */
+  await page.evaluate(() => {
+    document.querySelector('.dsh-html-ui-toolbar button').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  await page.waitForTimeout(250) /* 等 toolbar opacity transition (0.15s) 完成 */
+  /* 源码模式：工具栏常显（wrap 塌缩修复）——按钮文案应为「预览」 */
+  const srcMode = await page.evaluate(() => {
+    const wrap = document.querySelector('.dsh-html-ui-wrap')
+    const bar = document.querySelector('.dsh-html-ui-toolbar')
+    return {
+      hasSrcMode: wrap.classList.contains('dsh-html-ui-src-mode'),
+      barOpacity: getComputedStyle(bar).opacity,
+      btnLabel: document.querySelector('.dsh-html-ui-toolbar button').textContent,
+    }
+  })
+  expect(srcMode.hasSrcMode).toBe(true)
+  expect(srcMode.barOpacity).toBe('1')
+  expect(srcMode.btnLabel).toBe('预览')
+  /* 真实点击（非 dispatch）：工具栏可见可命中 → 切回预览 */
+  await page.locator('.dsh-html-ui-toolbar button').first().click()
+  await page.waitForTimeout(50)
+  const back2 = await page.evaluate(() => {
+    const iframe = document.querySelector('iframe.dsh-html-ui-frame')
+    return iframe ? iframe.style.display : ''
+  })
+  expect(back2).toBe('block')
+})
+
 test('决策10: multiple fences each mount independently', async ({ page }) => {
   await boot(page)
   await page.click('#add-fence')

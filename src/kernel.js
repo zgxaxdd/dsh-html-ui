@@ -311,6 +311,11 @@ export function createRenderer(options = {}) {
       'white-space:nowrap}' +
       '.dsh-html-ui-wrap:hover .dsh-html-ui-toolbar,.dsh-html-ui-toolbar:focus-within' +
       '{opacity:1;pointer-events:auto}' +
+      /* 源码模式：iframe 隐藏后 wrap 塌缩、hover 区域消失 —— 工具栏常显。
+       * 源码视图 = 原代码块显示在 wrap 之前，工具栏浮于其右上角。 */
+      '.dsh-html-ui-wrap.dsh-html-ui-src-mode .dsh-html-ui-toolbar' +
+      '{opacity:1;pointer-events:auto}' +
+      '.dsh-html-ui-wrap.dsh-html-ui-src-mode{min-height:34px}' +
       '@media(hover:none){.dsh-html-ui-toolbar{opacity:1;pointer-events:auto}}' +
       '.dsh-html-ui-toolbar button:focus-visible{outline:2px solid #38bdf8;outline-offset:1px}' +
       '@media (prefers-reduced-motion: reduce){.dsh-html-ui-toolbar{transition:none}}' +
@@ -474,17 +479,20 @@ export function createRenderer(options = {}) {
       },
     })
 
-    /* 源码/预览切换（决策 5）：源码视图 = 显示原代码块，隐藏 iframe */
+    /* 源码/预览切换（决策 5）：源码视图 = 显示原代码块，隐藏 iframe；
+     * 源码模式下工具栏常显（wrap 塌缩后 hover 区域消失的修复）。 */
     ui.bSrc.addEventListener('click', function () {
       try {
         mount.sourceView = !mount.sourceView
         if (mount.sourceView) {
           frame.style.display = 'none'
           block.style.display = ''
+          container.classList.add('dsh-html-ui-src-mode')
           ui.bSrc.textContent = dict.toolbar.preview
         } else {
           frame.style.display = 'block'
           block.style.display = 'none'
+          container.classList.remove('dsh-html-ui-src-mode')
           ui.bSrc.textContent = dict.toolbar.source
           renderFrame(mount)
         }

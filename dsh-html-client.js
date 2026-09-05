@@ -385,7 +385,7 @@
       if (existing) existing.remove();
       var style = doc.createElement("style");
       style.id = STYLE_ID;
-      style.textContent = '.dsh-html-ui-wrap{position:relative;margin:6px 0}.dsh-html-ui-frame{width:100%;border:0;display:block}.dsh-html-ui-toolbar{position:absolute;top:6px;right:8px;z-index:5;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid rgba(128,128,128,.3);border-radius:8px;background:rgba(255,255,255,.92);background:light-dark(rgba(255,255,255,.92),rgba(28,32,46,.86));color:#555;color:light-dark(#444,#e6e9f2);box-shadow:0 2px 10px rgba(0,0,0,.16);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .15s ease;font:11px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;white-space:nowrap}.dsh-html-ui-wrap:hover .dsh-html-ui-toolbar,.dsh-html-ui-toolbar:focus-within{opacity:1;pointer-events:auto}@media(hover:none){.dsh-html-ui-toolbar{opacity:1;pointer-events:auto}}.dsh-html-ui-toolbar button:focus-visible{outline:2px solid #38bdf8;outline-offset:1px}@media (prefers-reduced-motion: reduce){.dsh-html-ui-toolbar{transition:none}}.dsh-html-ui-toolbar .lbl{font-weight:600}.dsh-html-ui-toolbar .st{color:#b58900}.dsh-html-ui-toolbar button{border:1px solid rgba(128,128,128,.45);background:transparent;border-radius:6px;padding:1px 7px;font:inherit;color:inherit;cursor:pointer}.dsh-html-ui-toolbar button:hover{background:rgba(128,128,128,.16)}.dsh-html-ui-toolbar button:disabled{opacity:.45;cursor:default}.dsh-html-ui-warn{padding:6px 8px;color:#b58900;font:12px/1.6 system-ui,sans-serif}';
+      style.textContent = '.dsh-html-ui-wrap{position:relative;margin:6px 0}.dsh-html-ui-frame{width:100%;border:0;display:block}.dsh-html-ui-toolbar{position:absolute;top:6px;right:8px;z-index:5;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid rgba(128,128,128,.3);border-radius:8px;background:rgba(255,255,255,.92);background:light-dark(rgba(255,255,255,.92),rgba(28,32,46,.86));color:#555;color:light-dark(#444,#e6e9f2);box-shadow:0 2px 10px rgba(0,0,0,.16);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .15s ease;font:11px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;white-space:nowrap}.dsh-html-ui-wrap:hover .dsh-html-ui-toolbar,.dsh-html-ui-toolbar:focus-within{opacity:1;pointer-events:auto}.dsh-html-ui-wrap.dsh-html-ui-src-mode .dsh-html-ui-toolbar{opacity:1;pointer-events:auto}.dsh-html-ui-wrap.dsh-html-ui-src-mode{min-height:34px}@media(hover:none){.dsh-html-ui-toolbar{opacity:1;pointer-events:auto}}.dsh-html-ui-toolbar button:focus-visible{outline:2px solid #38bdf8;outline-offset:1px}@media (prefers-reduced-motion: reduce){.dsh-html-ui-toolbar{transition:none}}.dsh-html-ui-toolbar .lbl{font-weight:600}.dsh-html-ui-toolbar .st{color:#b58900}.dsh-html-ui-toolbar button{border:1px solid rgba(128,128,128,.45);background:transparent;border-radius:6px;padding:1px 7px;font:inherit;color:inherit;cursor:pointer}.dsh-html-ui-toolbar button:hover{background:rgba(128,128,128,.16)}.dsh-html-ui-toolbar button:disabled{opacity:.45;cursor:default}.dsh-html-ui-warn{padding:6px 8px;color:#b58900;font:12px/1.6 system-ui,sans-serif}';
       (doc.head || doc.documentElement).appendChild(style);
     }
     var mounts = /* @__PURE__ */ new Map();
@@ -570,10 +570,12 @@
           if (mount.sourceView) {
             frame.style.display = "none";
             block.style.display = "";
+            container.classList.add("dsh-html-ui-src-mode");
             ui.bSrc.textContent = dict.toolbar.preview;
           } else {
             frame.style.display = "block";
             block.style.display = "none";
+            container.classList.remove("dsh-html-ui-src-mode");
             ui.bSrc.textContent = dict.toolbar.source;
             renderFrame(mount);
           }
