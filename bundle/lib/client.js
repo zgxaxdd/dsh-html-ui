@@ -515,6 +515,7 @@
       frame.setAttribute("loading", "eager");
       frame.setAttribute("title", dict.aria.frame);
       frame.style.height = Math.max(40, initialHeight) + "px";
+      frame.setAttribute("data-dsh-html-ui-init-h", String(Math.max(40, initialHeight)));
       view.appendChild(frame);
       container.appendChild(ui.bar);
       container.appendChild(view);
@@ -1095,10 +1096,19 @@
               }
             }
           } else if (m.type === "attributes" && m.attributeName === "data-streaming") {
-            var t = blockOf(m.target);
-            if (t) {
-              changedBlocks.add(t);
-              touched = true;
+            var rowEl = m.target && m.target.nodeType === 1 ? m.target : null;
+            if (rowEl) {
+              var inside = rowEl.querySelectorAll ? rowEl.querySelectorAll(CODE_SELECTORS) : [];
+              for (var bi = 0; bi < inside.length; bi++) {
+                if (isPlausibleFenceSurface(inside[bi])) {
+                  changedBlocks.add(inside[bi]);
+                  touched = true;
+                }
+              }
+              if (rowEl.matches && rowEl.matches(CODE_SELECTORS)) {
+                changedBlocks.add(rowEl);
+                touched = true;
+              }
             }
           } else if (m.type === "characterData") {
             var blk2 = blockOf(m.target);

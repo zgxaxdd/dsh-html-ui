@@ -22,11 +22,13 @@
     "publish:bundle": "cd bundle && npm publish"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "^0.28.2",
     "eslint": "^9.39.5",
     "globals": "^15.15.0",
     "happy-dom": "^20.14.0",
+    "playwright": "^1.63.0",
     "vitest": "^5.0.0"
   },
   "engines": {

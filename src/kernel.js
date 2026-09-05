@@ -428,6 +428,8 @@ export function createRenderer(options = {}) {
     frame.setAttribute('loading', 'eager')
     frame.setAttribute('title', dict.aria.frame)
     frame.style.height = Math.max(40, initialHeight) + 'px'
+    /* 无缝切换验证钩子：记录接管时刻的初始高度（决策 3） */
+    frame.setAttribute('data-dsh-html-ui-init-h', String(Math.max(40, initialHeight)))
     view.appendChild(frame)
     container.appendChild(ui.bar)
     container.appendChild(view)

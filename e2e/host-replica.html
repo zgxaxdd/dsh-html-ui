@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-html-ui P1 E2E host replica</title>
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 0; padding: 24px; background: #fafafa; color: #222; }
+  #chat { max-width: 720px; margin: 0 auto; }
+  .flow-item { margin: 12px 0; }
+  .md-code-block { border: 1px solid #d4d4d8; border-radius: 8px; background: #f4f4f5; overflow: hidden; }
+  .md-code-block-banner { display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 12px; background: #e4e4e7; font-size: 12px; color: #52525b; }
+  .md-code-block pre { margin: 0; padding: 12px; overflow-x: auto; font: 12px/1.6 ui-monospace, Consolas, monospace; }
+  .md-code-block code { font: inherit; white-space: pre-wrap; word-break: break-word; }
+  .para { margin: 10px 0; }
+  h1 { font-size: 18px; }
+  #toolbar { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+  button { padding: 4px 10px; border: 1px solid #999; border-radius: 6px; background: #fff; cursor: pointer; font: 13px/1.4 sans-serif; }
+  .stat { font: 12px ui-monospace, monospace; color: #555; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="add-fence">添加围栏</button>
+  <button id="add-fence-user">添加用户行围栏（不应接管）</button>
+  <button id="add-toolcard">添加工具卡围栏（不应接管）</button>
+  <button id="stream-start">开始流式</button>
+  <button id="stream-end">流式结束</button>
+  <button id="clear">清空</button>
+  <span class="stat" id="stat"></span>
+</div>
+<div id="chat"></div>
+
+<script>
+/* ---- 宿主 DOM 复刻工具（0.1.2-rc.1 形态） ---- */
+function makeRow(kind) {
+  var row = document.createElement('div');
+  row.className = 'flow-item';
+  row.setAttribute('data-chat-flow-kind', kind);
+  if (kind === 'assistant') row.setAttribute('data-chat-anchor-key', '14:assistant-step1:' + (window.__seq++));
+  else row.setAttribute('data-chat-anchor-key', '9:' + kind + '-step1:' + (window.__seq++));
+  return row;
+}
+window.__seq = 0;
+
+function makeFence(lang, content) {
+  var block = document.createElement('div');
+  block.className = 'md-code-block';
+  var banner = document.createElement('div');
+  banner.className = 'md-code-block-banner';
+  var label = document.createElement('div');
+  label.className = 'infostring';
+  label.textContent = lang;
+  var pre = document.createElement('pre');
+  var code = document.createElement('code');
+  code.textContent = content;
+  pre.appendChild(code);
+  banner.appendChild(label);
+  block.appendChild(banner);
+  block.appendChild(pre);
+  return block;
+}
+
+function para(text) {
+  var p = document.createElement('p');
+  p.className = 'para';
+  p.textContent = text;
+  return p;
+}
+
+/* 围栏 + 后续段落（模拟 markdown 渲染顺序：围栏闭合后出现下一块） */
+function addAssistantFence(lang, content, withTail) {
+  var row = makeRow('assistant');
+  var block = makeFence(lang, content);
+  row.appendChild(block);
+  if (withTail) row.appendChild(para('后续段落（围栏已闭合）'));
+  document.getElementById('chat').appendChild(row);
+  return { row: row, block: block };
+}
+
+/* 流式模拟：data-streaming 在行上，边写代码体边增长 */
+var streamingRow = null;
+var streamingTimer = null;
+function streamStart(lang) {
+  streamEnd();
+  var row = makeRow('assistant');
+  row.setAttribute('data-streaming', '');
+  var block = makeFence(lang, '');
+  row.appendChild(block);
+  document.getElementById('chat').appendChild(row);
+  streamingRow = row;
+  var code = block.querySelector('code');
+  var content = '<div style="padding:8px">' + '<b>流式内容</b> ' + 'x'.repeat(20) + '</div>';
+  var i = 0;
+  streamingTimer = setInterval(function () {
+    i += 3;
+    if (i > content.length) { clearInterval(streamingTimer); streamingTimer = null; return; }
+    code.textContent = content.slice(0, i);
+  }, 16);
+}
+function streamEnd() {
+  if (streamingTimer) { clearInterval(streamingTimer); streamingTimer = null; }
+  if (streamingRow) { streamingRow.removeAttribute('data-streaming'); streamingRow = null; }
+}
+
+document.getElementById('add-fence').onclick = function () {
+  addAssistantFence('html', '<div style="padding:8px;border:1px solid #3b82f6;border-radius:8px">渲染成功 ✓ <b>F$test</b></div>', true);
+};
+document.getElementById('add-fence-user').onclick = function () {
+  var row = makeRow('user');
+  row.appendChild(makeFence('html', '<div>用户行</div>'));
+  document.getElementById('chat').appendChild(row);
+};
+document.getElementById('add-toolcard').onclick = function () {
+  var row = document.createElement('div');
+  row.className = 'tool-card';
+  row.appendChild(makeFence('html', '<div>工具结果</div>'));
+  document.getElementById('chat').appendChild(row);
+};
+document.getElementById('stream-start').onclick = function () { streamStart('html'); };
+document.getElementById('stream-end').onclick = function () { streamEnd(); };
+document.getElementById('clear').onclick = function () {
+  streamEnd();
+  document.getElementById('chat').innerHTML = '';
+};
+
+/* 统计：被接管的围栏（iframe 数） */
+window.__stats = function () {
+  var iframes = document.querySelectorAll('iframe.dsh-html-ui-frame').length;
+  var wraps = document.querySelectorAll('.dsh-html-ui-wrap').length;
+  return { iframes: iframes, wraps: wraps };
+};
+</script>
+</body>
+</html>

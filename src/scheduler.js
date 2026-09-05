@@ -335,8 +335,18 @@ export function installScheduler(kernel, options = {}) {
             }
           }
         } else if (m.type === 'attributes' && m.attributeName === 'data-streaming') {
-          var t = blockOf(m.target)
-          if (t) { changedBlocks.add(t); touched = true }
+          /* F9 闭合判定 b：data-streaming 移除/添加 → 标记行内所有候选块。
+           * 注意 m.target 是消息行（.flow-item），blockOf 对它向上找不到
+           * 代码块（blockOf 只对 pre 做结构兜底）—— 需要从行内查代码块。 */
+          var rowEl = m.target && m.target.nodeType === 1 ? m.target : null
+          if (rowEl) {
+            var inside = rowEl.querySelectorAll ? rowEl.querySelectorAll(CODE_SELECTORS) : []
+            for (var bi = 0; bi < inside.length; bi++) {
+              if (isPlausibleFenceSurface(inside[bi])) { changedBlocks.add(inside[bi]); touched = true }
+            }
+            /* 行自身也可能带表面类（罕见） */
+            if (rowEl.matches && rowEl.matches(CODE_SELECTORS)) { changedBlocks.add(rowEl); touched = true }
+          }
         } else if (m.type === 'characterData') {
           /* F5：字符变更 → 标记所在块（闭合判定 c 用 charDirty） */
           var blk2 = blockOf(m.target)
