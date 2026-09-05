@@ -136,17 +136,29 @@ export function createRenderer(options = {}) {
   function ensureKatexCss(cb) {
     if (typeof katexCssCache === 'string') { cb(katexCssCache); return }
     if (katexCssPromise) { katexCssPromise.then(cb); return }
-    katexCssPromise = win.fetch(assetsBase + 'katex.min.css?v=' + VERSION)
+    /* 优先 data-URI 内联字体版（build.mjs 生成 katex.inline.css）——
+     * 满足 CSP font-src data: 基线（F7 零外网）；404 回退 URL 改写版。 */
+    katexCssPromise = win.fetch(assetsBase + 'katex.inline.css?v=' + VERSION)
       .then(function (r) { return r.ok ? r.text() : null })
-      .then(function (txt) {
-        if (!txt) { katexCssPromise = null; return null }
-        var out = txt.replace(
-          /url\(["']?fonts\/([^)"']+)["']?\)/g,
-          'url(' + assetsBase + 'fonts/$1?v=' + VERSION + ')'
-        )
-        out += '.katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}'
-        katexCssCache = out
-        return out
+      .then(function (inline) {
+        if (inline) {
+          inline += '.katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}'
+          katexCssCache = inline
+          return inline
+        }
+        /* 回退：katex.min.css + 字体绝对路径改写（宿主 origin，同源可加载） */
+        return win.fetch(assetsBase + 'katex.min.css?v=' + VERSION)
+          .then(function (r) { return r.ok ? r.text() : null })
+          .then(function (txt) {
+            if (!txt) { katexCssPromise = null; return null }
+            var out = txt.replace(
+              /url\(["']?fonts\/([^)"']+)["']?\)/g,
+              'url(' + assetsBase + 'fonts/$1?v=' + VERSION + ')'
+            )
+            out += '.katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}'
+            katexCssCache = out
+            return out
+          })
       })
       .catch(function () { katexCssCache = null; katexCssPromise = null; return null })
     katexCssPromise.then(cb)

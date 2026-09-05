@@ -263,20 +263,29 @@
         katexCssPromise.then(cb);
         return;
       }
-      katexCssPromise = win.fetch(assetsBase + "katex.min.css?v=" + VERSION).then(function(r) {
+      katexCssPromise = win.fetch(assetsBase + "katex.inline.css?v=" + VERSION).then(function(r) {
         return r.ok ? r.text() : null;
-      }).then(function(txt) {
-        if (!txt) {
-          katexCssPromise = null;
-          return null;
+      }).then(function(inline) {
+        if (inline) {
+          inline += ".katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}";
+          katexCssCache = inline;
+          return inline;
         }
-        var out = txt.replace(
-          /url\(["']?fonts\/([^)"']+)["']?\)/g,
-          "url(" + assetsBase + "fonts/$1?v=" + VERSION + ")"
-        );
-        out += ".katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}";
-        katexCssCache = out;
-        return out;
+        return win.fetch(assetsBase + "katex.min.css?v=" + VERSION).then(function(r) {
+          return r.ok ? r.text() : null;
+        }).then(function(txt) {
+          if (!txt) {
+            katexCssPromise = null;
+            return null;
+          }
+          var out = txt.replace(
+            /url\(["']?fonts\/([^)"']+)["']?\)/g,
+            "url(" + assetsBase + "fonts/$1?v=" + VERSION + ")"
+          );
+          out += ".katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}";
+          katexCssCache = out;
+          return out;
+        });
       }).catch(function() {
         katexCssCache = null;
         katexCssPromise = null;

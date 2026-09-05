@@ -189,7 +189,34 @@ writeFileSync(join(bundleDir, 'cordis.patch.yml'), `# dsh-html-ui bundle for Dee
 
 /* 2.5 KaTeX assets（复用旧版 dsh-html-render 资产，含 SHA256SUMS 基建） */
 copyDir(join(root, 'vendor', 'katex'), join(bundleDir, 'lib', 'assets', 'katex'))
+/* 生成 data-URI 内联字体版 CSS：满足 iframe CSP font-src data:（F7 零外网） */
+buildKatexInlineCss(join(bundleDir, 'lib', 'assets', 'katex'))
 copyFileSync(join(root, 'skills', 'dsh-html-ui', 'SKILL.md'), join(bundleDir, 'skills', 'dsh-html-ui', 'SKILL.md'))
+
+/* 将 katex.min.css 的 fonts/ 引用替换为 data: 内联字体（构建期，零运行时外网）。
+ * 每字体三种格式（woff2/woff/ttf）：woff2 是首选，但为杜绝 iframe 内
+ * CSP font-src data: 的任何告警，三种格式全部内联（浏览器只取第一个可用）。 */
+function buildKatexInlineCss(katexDir) {
+  const cssPath = join(katexDir, 'katex.min.css')
+  if (!existsSync(cssPath)) { console.warn('katex.min.css missing; skip inline css'); return }
+  let css = readFileSync(cssPath, 'utf8')
+  css = css.replace(/url\(["']?fonts\/([^)"']+)["']?\)/g, (m, name) => {
+    const fontPath = join(katexDir, 'fonts', name)
+    if (!existsSync(fontPath)) return m
+    const ext = name.slice(name.lastIndexOf('.'))
+    const mime = ext === '.woff2' ? 'font/woff2' : ext === '.woff' ? 'font/woff' : 'font/ttf'
+    const b64 = readFileSync(fontPath).toString('base64')
+    return `url(data:${mime};base64,${b64})`
+  })
+  /* 删除仍指向 fonts/ 的 fallback（vendor 只有 woff2；woff/ttf 引用无文件，
+   * 浏览器也不会请求——但为避免任何潜在 CSP 告警，整段 url+format 删掉） */
+  css = css.replace(/url\(["']?fonts\/[^)"']+["']?\)\s*format\([^)]*\)\s*,?/g, '')
+  /* 若 src 只剩一个 data: 项，结尾可能残留逗号 → 归一 */
+  css = css.replace(/src:(data:[^;]*),?\}/g, 'src:$1}')
+  writeFileSync(join(katexDir, 'katex.inline.css'), css)
+  const remaining = (css.match(/url\([^)]*fonts\//g) || []).length
+  console.log(`  katex.inline.css   (${Math.round(css.length / 1024)} KB, fonts inlined; remaining refs: ${remaining})`)
+}
 
 /* 2.6 bundle README */
 writeFileSync(join(bundleDir, 'README.md'), `# dsh-html-ui（DSH profile bundle）
