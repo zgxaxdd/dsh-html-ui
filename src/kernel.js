@@ -299,7 +299,9 @@ export function createRenderer(options = {}) {
     var style = doc.createElement('style')
     style.id = STYLE_ID
     style.textContent =
-      '.dsh-html-ui-wrap{position:relative;margin:6px 0}' +
+      /* 撑满父容器宽度（块级 + flex/grid 子项兼容：min-width:0 防内容
+       * 把容器撑出；flex:1 1 0 让 flex 父容器下也占满剩余空间） */
+      '.dsh-html-ui-wrap{position:relative;margin:6px 0;width:100%;min-width:0;flex:1 1 0;box-sizing:border-box}' +
       '.dsh-html-ui-frame{width:100%;border:0;display:block}' +
       '.dsh-html-ui-toolbar{position:absolute;top:6px;right:8px;z-index:5;display:flex;' +
       'align-items:center;gap:4px;padding:3px 8px;border:1px solid rgba(128,128,128,.3);' +

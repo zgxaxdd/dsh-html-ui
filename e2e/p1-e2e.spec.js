@@ -235,3 +235,37 @@ test('F9: no time-based fake settle — unclosed fence stays code block', async 
   expect(r.iframes).toBe(0)
   await page.click('#stream-end')
 })
+
+test('宽度: iframe fills container (block + flex 子项)', async ({ page }) => {
+  await boot(page)
+  /* 普通块级容器 */
+  await page.evaluate(() => {
+    const row = document.createElement('div')
+    row.className = 'flow-item'
+    row.setAttribute('data-chat-flow-kind', 'assistant')
+    row.setAttribute('data-chat-anchor-key', '14:assistant-stepW:0')
+    const block = document.createElement('div')
+    block.className = 'md-code-block'
+    const b = document.createElement('div')
+    b.className = 'md-code-block-banner'
+    const l = document.createElement('div'); l.className = 'infostring'; l.textContent = 'html'
+    const pre = document.createElement('pre'); const code = document.createElement('code')
+    code.textContent = '<div style="width:100%">width test</div>'
+    pre.appendChild(code); b.appendChild(l); block.appendChild(b); block.appendChild(pre)
+    row.appendChild(block)
+    document.getElementById('chat').appendChild(row)
+  })
+  await page.waitForTimeout(120)
+  const w = await page.evaluate(() => {
+    const chat = document.getElementById('chat')
+    const iframe = document.querySelector('iframe.dsh-html-ui-frame')
+    const wrap = document.querySelector('.dsh-html-ui-wrap')
+    return {
+      chatW: chat.getBoundingClientRect().width,
+      wrapW: wrap.getBoundingClientRect().width,
+      iframeW: iframe.getBoundingClientRect().width,
+    }
+  })
+  expect(w.wrapW).toBeGreaterThanOrEqual(w.chatW * 0.95)   /* wrap 撑满容器 */
+  expect(w.iframeW).toBeGreaterThanOrEqual(w.chatW * 0.95) /* iframe 撑满 wrap */
+})
