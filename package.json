@@ -1,0 +1,46 @@
+{
+  "name": "dsh-html-ui",
+  "version": "1.0.0",
+  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — deterministic fence takeover, event-driven height, zero-CPU idle, sandboxed iframes.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src",
+    "dsh-html-client.js",
+    "vendor/katex",
+    "skills/dsh-html-ui/SKILL.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "check": "node --check src/kernel.js && node --check src/pure.js && node --check src/scheduler.js && node --check src/entry.js && node --check src/client-wrapper.js && node tools/verify-sha256sums.mjs vendor/katex/SHA256SUMS vendor/katex && node --check dsh-html-client.js && node --check bundle/lib/client.js && node --check bundle/lib/index.js",
+    "lint": "eslint src/*.js tools/*.mjs",
+    "test": "vitest run",
+    "build:bundle": "node tools/build.mjs",
+    "publish:bundle": "cd bundle && npm publish"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^5.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "happy-dom": "^20.14.0",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "harness",
+    "dsh-plugin",
+    "html",
+    "katex",
+    "latex",
+    "sandbox",
+    "renderer"
+  ]
+}

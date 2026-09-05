@@ -1,0 +1,5 @@
+# dsh-html-ui bundle for DeepSeek Harness (dsh).
+# Installed via: dsh plugin --profile web add dsh-html-ui
+- insert:
+    - id: ui-dsh-html-ui
+      name: 'dsh-html-ui'

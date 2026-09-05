@@ -1,0 +1,43 @@
+{
+  "name": "dsh-html-ui",
+  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — deterministic fence takeover, event-driven height, zero-CPU idle, sandboxed iframes. Install: dsh plugin --profile web add dsh-html-ui",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zgxaxdd/dsh-html-ui.git"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "scripts": {
+    "prepublishOnly": "cd .. && npm run check && npm run build:bundle"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "katex",
+    "html-renderer",
+    "sandbox"
+  ]
+}
