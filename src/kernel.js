@@ -325,7 +325,11 @@ export function createRenderer(options = {}) {
       'border-radius:6px;padding:1px 7px;font:inherit;color:inherit;cursor:pointer}' +
       '.dsh-html-ui-toolbar button:hover{background:rgba(128,128,128,.16)}' +
       '.dsh-html-ui-toolbar button:disabled{opacity:.45;cursor:default}' +
-      '.dsh-html-ui-warn{padding:6px 8px;color:#b58900;font:12px/1.6 system-ui,sans-serif}'
+      '.dsh-html-ui-warn{padding:6px 8px;color:#b58900;font:12px/1.6 system-ui,sans-serif}' +
+      /* 源码视图（wrap 内 <pre>，工具栏常显于容器右上角，可滚动） */
+      '.dsh-html-ui-src{max-height:420px;overflow:auto;padding:10px 12px;margin:0;' +
+      'font:12px/1.6 ui-monospace,Consolas,"SF Mono",monospace;white-space:pre;' +
+      'background:rgba(128,128,128,.06);color:light-dark(#1f2937,#e5e7eb);border-radius:8px}'
     ;(doc.head || doc.documentElement).appendChild(style)
   }
 
@@ -479,19 +483,25 @@ export function createRenderer(options = {}) {
       },
     })
 
-    /* 源码/预览切换（决策 5）：源码视图 = 显示原代码块，隐藏 iframe；
-     * 源码模式下工具栏常显（wrap 塌缩后 hover 区域消失的修复）。 */
+    /* 源码/预览切换（决策 5 修正）：源码视图在 wrap 内渲染 <pre>（不显示
+     * 宿主原块——真实 DSH 中 React 可能已替换原块节点，显示它会错位且
+     * 工具栏失去点击区）。wrap 高度由 <pre> 撑起，工具栏常显于右上角。 */
     ui.bSrc.addEventListener('click', function () {
       try {
         mount.sourceView = !mount.sourceView
         if (mount.sourceView) {
           frame.style.display = 'none'
-          block.style.display = ''
+          view.textContent = ''
+          var pre = doc.createElement('pre')
+          pre.className = 'dsh-html-ui-src'
+          pre.textContent = mount.raw
+          view.appendChild(pre)
           container.classList.add('dsh-html-ui-src-mode')
           ui.bSrc.textContent = dict.toolbar.preview
         } else {
+          view.textContent = ''
+          view.appendChild(frame)
           frame.style.display = 'block'
-          block.style.display = 'none'
           container.classList.remove('dsh-html-ui-src-mode')
           ui.bSrc.textContent = dict.toolbar.source
           renderFrame(mount)

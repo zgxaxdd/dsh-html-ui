@@ -147,20 +147,21 @@ test('F1 regression: settle renders iframe; source toggle restores block (决策
   await page.click('#add-fence')
   await page.waitForTimeout(150)
   expect(await page.evaluate(() => window.__stats().iframes)).toBe(1)
-  /* 切源码：iframe 隐藏、原块恢复可见（dispatchEvent 绕过 iframe 指针拦截） */
+  /* 切源码：iframe 隐藏、wrap 内出现 <pre> 源码（dispatchEvent 绕过拦截） */
   await page.evaluate(() => {
     const btn = document.querySelector('.dsh-html-ui-toolbar button')
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   await page.waitForTimeout(50)
   const src = await page.evaluate(() => {
-    const block = document.querySelector('.md-code-block')
+    const pre = document.querySelector('.dsh-html-ui-src')
     const iframe = document.querySelector('iframe.dsh-html-ui-frame')
-    return { blockDisplay: block ? block.style.display : '', iframeDisplay: iframe ? iframe.style.display : '' }
+    /* 源码模式：iframe 从 view 移除（不在 DOM），wrap 内渲染 <pre> 源码 */
+    return { hasPre: !!pre, iframeGone: !iframe }
   })
-  expect(src.blockDisplay).toBe('')
-  expect(src.iframeDisplay).toBe('none')
-  /* 切回预览：iframe 回来 */
+  expect(src.hasPre).toBe(true)
+  expect(src.iframeGone).toBe(true)
+  /* 切回预览：iframe 回来、<pre> 移除 */
   await page.evaluate(() => {
     const btn = document.querySelector('.dsh-html-ui-toolbar button')
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -168,9 +169,11 @@ test('F1 regression: settle renders iframe; source toggle restores block (决策
   await page.waitForTimeout(50)
   const back = await page.evaluate(() => {
     const iframe = document.querySelector('iframe.dsh-html-ui-frame')
-    return iframe ? iframe.style.display : ''
+    const pre = document.querySelector('.dsh-html-ui-src')
+    return { iframeBack: !!iframe, preGone: !pre }
   })
-  expect(back).toBe('block')
+  expect(back.iframeBack).toBe(true)
+  expect(back.preGone).toBe(true)
 })
 
 test('决策5 regress: source mode toolbar visible & click-back works (bug: no preview option)', async ({ page }) => {
@@ -183,17 +186,22 @@ test('决策5 regress: source mode toolbar visible & click-back works (bug: no p
     document.querySelector('.dsh-html-ui-toolbar button').dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   await page.waitForTimeout(250) /* 等 toolbar opacity transition (0.15s) 完成 */
-  /* 源码模式：工具栏常显（wrap 塌缩修复）——按钮文案应为「预览」 */
+  /* 源码模式：wrap 内 <pre> 源码、工具栏常显、按钮文案「预览」 */
   const srcMode = await page.evaluate(() => {
     const wrap = document.querySelector('.dsh-html-ui-wrap')
     const bar = document.querySelector('.dsh-html-ui-toolbar')
+    const pre = document.querySelector('.dsh-html-ui-src')
     return {
       hasSrcMode: wrap.classList.contains('dsh-html-ui-src-mode'),
+      hasPre: !!pre,
+      preLen: pre ? pre.textContent.length : 0,
       barOpacity: getComputedStyle(bar).opacity,
       btnLabel: document.querySelector('.dsh-html-ui-toolbar button').textContent,
     }
   })
   expect(srcMode.hasSrcMode).toBe(true)
+  expect(srcMode.hasPre).toBe(true)
+  expect(srcMode.preLen).toBeGreaterThan(0)
   expect(srcMode.barOpacity).toBe('1')
   expect(srcMode.btnLabel).toBe('预览')
   /* 真实点击（非 dispatch）：工具栏可见可命中 → 切回预览 */
@@ -201,9 +209,11 @@ test('决策5 regress: source mode toolbar visible & click-back works (bug: no p
   await page.waitForTimeout(50)
   const back2 = await page.evaluate(() => {
     const iframe = document.querySelector('iframe.dsh-html-ui-frame')
-    return iframe ? iframe.style.display : ''
+    const pre = document.querySelector('.dsh-html-ui-src')
+    return { iframeDisplay: iframe ? iframe.style.display : '', preGone: !pre }
   })
-  expect(back2).toBe('block')
+  expect(back2.iframeDisplay).toBe('block')
+  expect(back2.preGone).toBe(true)
 })
 
 test('决策10: multiple fences each mount independently', async ({ page }) => {
