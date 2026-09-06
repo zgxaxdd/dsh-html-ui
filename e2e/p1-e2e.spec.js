@@ -236,6 +236,46 @@ test('F9: no time-based fake settle — unclosed fence stays code block', async 
   await page.click('#stream-end')
 })
 
+test('F3: fence-inline \\(...\\) renders; single $ stays literal', async ({ page }) => {
+  await boot(page)
+  /* E2E 无插件资产路由 → 先注入 fake KaTeX（renderToString 返回标记） */
+  await page.addScriptTag({ content: 'window.katex={renderToString:(s)=>`<span class="katex">[TEX:${s}]</span>`}' })
+  /* 围栏内含 \(...\) 行内公式 + 单 $ 金额 */
+  await page.evaluate(() => {
+    const row = document.createElement('div')
+    row.className = 'flow-item'
+    row.setAttribute('data-chat-flow-kind', 'assistant')
+    row.setAttribute('data-chat-anchor-key', '14:assistant-stepM:0')
+    const block = document.createElement('div')
+    block.className = 'md-code-block'
+    const b = document.createElement('div')
+    b.className = 'md-code-block-banner'
+    const l = document.createElement('div'); l.className = 'infostring'; l.textContent = 'html'
+    const pre = document.createElement('pre'); const code = document.createElement('code')
+    code.textContent = '<div>\\(T = 9550 \\cdot \\frac{1.5}{1450}\\) 元 单价 $50</div>'
+    pre.appendChild(code); b.appendChild(l); block.appendChild(b); block.appendChild(pre)
+    row.appendChild(block)
+    const p = document.createElement('p'); p.textContent = 'tail'
+    row.appendChild(p)
+    document.getElementById('chat').appendChild(row)
+  })
+  await page.waitForTimeout(250)
+  const r = await page.evaluate(() => {
+    const iframe = document.querySelector('iframe.dsh-html-ui-frame')
+    const srcdoc = iframe ? (iframe.srcdoc || '') : ''
+    return {
+      hasFence: !!iframe,
+      /* \(...\) 被 fake KaTeX 替换（围栏内行内公式支持） */
+      katexRendered: srcdoc.indexOf('[TEX:') !== -1,
+      /* 单 $ 金额保持字面量 */
+      moneyLiteral: srcdoc.indexOf('单价 $50') !== -1,
+    }
+  })
+  expect(r.hasFence).toBe(true)
+  expect(r.katexRendered).toBe(true)
+  expect(r.moneyLiteral).toBe(true)
+})
+
 test('宽度: iframe fills container (block + flex 子项)', async ({ page }) => {
   await boot(page)
   /* 普通块级容器 */

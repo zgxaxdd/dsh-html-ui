@@ -199,6 +199,11 @@
       return false;
     }
     function ensureKatex(cb, onFail) {
+      if (win.katex && typeof win.katex.renderToString === "function") {
+        katexState = "ok";
+        cb();
+        return;
+      }
       if (katexState === "ok") {
         cb();
         return;

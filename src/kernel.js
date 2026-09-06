@@ -101,6 +101,12 @@ export function createRenderer(options = {}) {
   }
 
   function ensureKatex(cb, onFail) {
+    /* 全局已有可用 katex（宿主注入/测试桩）→ 直接用，不重复加载 */
+    if (win.katex && typeof win.katex.renderToString === 'function') {
+      katexState = 'ok'
+      cb()
+      return
+    }
     if (katexState === 'ok') { cb(); return }
     if (katexState === 'loading') { katexQueue.push(cb); if (onFail) katexFailQueue.push(onFail); return }
     if (katexState === 'fail') { if (onFail) onFail(); return }
