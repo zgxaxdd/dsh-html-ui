@@ -1,0 +1,7 @@
+node_modules/
+*.tgz
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+npm-debug.log*
+.verify-pack/

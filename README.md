@@ -1,65 +1,59 @@
-# dsh-html-ui — DSH 聊天内联 HTML 渲染器（v2 重写）
+# dsh-html-ui — DSH 聊天内联 HTML 渲染器
 
-**让模型回复里的 HTML 直接在聊天流里"活"起来**——确定性接管、零 CPU 空闲、
-流式零闪烁。修复了旧版 dsh-html-render 的全部已知缺陷（F1–F10）。
+**让模型回复里的 HTML 直接在聊天流里"活"起来**——确定性接管、零 CPU 空闲、流式零闪烁；
+v4 起带**输出前自查工具**（回执含可直接采用的修复版源码）与**同回合围栏自修闭环**。
+
+```html
+<!-- 模型写： --> ```html <div style="padding:8px;border:1px solid #3b82f6;border-radius:8px">渲染成功 ✓</div> ```
+<!-- 用户看到：沙箱 iframe 里真渲染的 HTML，悬浮出工具栏（源码/预览/新标签/复制/重载/下载） -->
+```
 
 ## 安装
 
 ```sh
-# 1) 安装（bundle 形态，一条命令）
+# bundle 形态（当前部署真相源；v2.0.0 起 hand-maintained，构建链 tools/build.mjs 为 v1.0.0 遗产）
 dsh plugin --profile web add link:D:\path\to\dsh-html-ui\bundle   # 本地 link
 dsh plugin --profile web add dsh-html-ui                          # npm 形态（发布后）
 
-# 2) 重启 DSH host + 浏览器硬刷新（Ctrl+F5）
-# 3) 在任意会话粘贴测试围栏：
-#    ```html <div style="padding:8px;border:1px solid #3b82f6;border-radius:8px">渲染成功 ✓</div> ```
+# 重启 DSH host + 浏览器硬刷新（Ctrl+F5）
 ```
 
-## 配置项（bundle/package.json#dsh.client 或内核 options.config）
+## 仓库布局
 
-| 配置 | 默认 | 说明 |
-|---|---|---|
-| `requireMarker` | `false` | `true` 时仅接管 info string 为 `html-render`/`dsh-html` 的围栏 |
-| `latex` | `true` | `false` 时关闭 KaTeX 通道（公式原样显示） |
-| `allowRemoteImages` | `false` | `true` 时仅追加 `https:` 图片源（仍禁 http:） |
-| `maxHeight` | `12000` | iframe 高度上限 px |
+| 路径 | 角色 |
+|---|---|
+| **`bundle/`** | **部署真相源**：DSH 插件包（`lib/{index,client,validate,feedback}.mjs`、skills、test、scripts、docs）。link 安装指向这里 |
+| `src/` `tools/` | v1.0.0 时代的未打包源码 + esbuild 构建链（历史保留；`src/` 停留在 v1.0.0，不再回填） |
+| `test/` `e2e/` `examples/` | v1.0.0 时代的 vitest / Playwright 测试与示例（同上） |
+| `vendor/katex/` | v1.0.0 时代的 KaTeX 资产副本；浏览器端实际加载的是 `bundle/lib/assets/katex/` |
+| `skills/dsh-html-ui/SKILL.md` | marketplace 镜像，与 `bundle/skills/dsh-html-ui/SKILL.md` 同步 |
+| `docs/` | 设计文档（`DESIGN-BASELINE.md` v2 重写基线、`V3-DESIGN.md`、`V4-DESIGN.md`） |
+| `dsh-html-client.js` | v1.0.0 页面级 IIFE 产物（历史保留） |
 
-## 与旧版（dsh-html-render）的差异（F1–F10 对照）
+## 能力总览（v4.0.0）
 
-| # | 缺陷 | v2 修复 |
-|---|---|---|
-| F1 | 流式 450ms 重设 srcdoc（白闪/丢状态） | 流式期间**零 srcdoc 写入**；未闭合前保持宿主代码块 |
-| F2 | 内容启发式漏判（不认 svg/p/h3） | **确定性接管**：assistant 行内 html/dsh-html 一律接管，零内容猜测 |
-| F3 | 单 `$` 误伤金额文本 | LaTeX 只处理 `$$…$$`/`\[…\]`/`\(…\)`，**永不处理单 $**；`latex:false` 可整体关闭 |
-| F4 | iframe 内 400ms 永久轮询 | 完全事件驱动（ResizeObserver+MO+fonts.ready+rAF 双帧），**零定时器** |
-| F5 | 流式全页 sweep + 全文遍历 | 闭合判定不读内容；内容只在接管时刻读一次；sweep 只复查变更过的块 |
-| F6 | 裸 mdt 片段通道与宿主打架 | **删除该通道**；围栏是唯一协议 |
-| F7 | 外链 http/https 图片 | 默认 `img-src data: blob:`（无外网）；`allowRemoteImages` 才加 `https:` |
-| F8 | 工具卡内 html 被误接管 | 仅 `[data-chat-anchor-key]` 含 assistant（或 flow-kind=assistant）的行内围栏 |
-| F9 | 30s 强制假结算 | 渲染前提恒为"围栏已闭合"（结构判定），无时间假结算 |
-| F10 | inject 三服务硬激活，缺席静默死 | inject 最小化（空）；theme/locale 全部 `ctx.inject` 可选注入 |
+1. ` ```html `/` ```dsh-html ` 围栏 → 沙箱 iframe 真渲染（本地脚本、块级 KaTeX、主题自适应、事件驱动高度）
+2. `dsh_html_check` 模型侧自查工具：输出复杂围栏前校验，回执带 `next` 动作与 **`repaired_html`**（可直接采用的修复版源码）
+3. **同回合围栏自修**：不可渲染的围栏在回合结束前收到一次修正通知（每回合一次 / 每围栏一次 / 子代理不触发）
+4. 规则集 4 诊断：稳定错误码 + 行号 + 修复指令；last-good 保留上次成功渲染；懒渲染 + 自适应扫描
+5. 自包含导出（.html，随附源码）；en/zh 本地化；无障碍补全
 
-## 安全模型
+详细契约见 [bundle/README.md](bundle/README.md)（能力矩阵、校验回执表、配置项、调试 API）与
+[bundle/skills/dsh-html-ui/SKILL.md](bundle/skills/dsh-html-ui/SKILL.md)（模型侧书写协议）。
 
-- iframe `sandbox="allow-scripts"` 不透明源；**永不** allow-same-origin/popups/top-navigation
-- 文档内 CSP：`default-src 'none'`；`connect-src 'none'`（禁网络）；`frame-src 'none'`（禁嵌套 iframe）
-- 模型 HTML 永不进入主文档 DOM；无 dangerouslySetInnerHTML / innerHTML 解析 / eval
-- 安全样本集单测全绿（外链脚本/内联事件/base/表单/嵌套 iframe/window.open/fetch/localStorage/伪造 postMessage/超长输入）
-- `window.__dshHtmlUi.disable()` / `stats()` 控制台诊断
-
-## 开发
+## 开发与回归
 
 ```sh
-npm install
-npm run build       # esbuild 产出 IIFE + bundle
-npm run test        # vitest（纯函数 + DOM 冒烟 + 安全样本）
-npx playwright test # P1 E2E（复用系统 Edge）
-npm run check       # 语法 + 校验和
-npm run lint        # ESLint
+npm test           # → bundle：feedback + validate + parity + load 四套件
+npm run check      # → bundle：四个模块语法检查
+npm run verify:pack # → bundle：打真 tarball 自检（必含清单 / 体积上限 / KaTeX 资产）
+npm run build      # v1.0.0 构建链（tools/build.mjs）——仅供追溯，不会回填 v2+ 的 hand-maintained bundle
 ```
 
-## 卸载
+修改校验规则：改 `bundle/lib/validate.mjs` → `node bundle/test/embed-validate.mjs` → `npm test`
+（双实现一致性由 `bundle/test/parity.test.mjs` 逐用例锁死）。
 
-```sh
-dsh plugin --profile web remove dsh-html-ui
-```
+## 版本史
+
+见 [CHANGELOG.md](CHANGELOG.md)：v1.0.0（确定性重写）→ v2.0.0（渲染前校验 + last-good）→
+v3.0.0（`dsh_html_check` 自查工具 + meta 头）→ **v4.0.0（自修反馈环 + 规则集 4 + 修复版回执）**。

@@ -1,0 +1,11 @@
+# 统一换行：仓库内一律 LF，避免 Windows 全局 autocrlf 把落地文件洗成 CRLF
+* text=auto eol=lf
+
+# 二进制资产（text=auto 的探测对它们不可靠，显式钉死）
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary
+*.ico binary

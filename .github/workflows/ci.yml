@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Syntax (host + client + shared + feedback)
+        run: npm run check
+      - name: Tests (feedback + validate + parity + load)
+        run: npm test
+      - name: Pack self-check
+        run: node scripts/verify-pack.mjs --keep
+
+  windows-pack:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Windows pack (files/exports path + case sanity)
+        run: |
+          npm pack --json
+          node scripts/verify-pack.mjs

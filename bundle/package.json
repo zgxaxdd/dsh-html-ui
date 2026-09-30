@@ -1,7 +1,7 @@
 {
   "name": "dsh-html-ui",
-  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — deterministic fence takeover, event-driven height, zero-CPU idle, sandboxed iframes. Install: dsh plugin --profile web add dsh-html-ui",
-  "version": "1.0.0",
+  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — v4: dsh_html_check model-facing pre-render validation tool with auto-repaired source (repaired_html), optional typed meta header (title/full), bounded same-turn fence repair feedback loop, ruleSet 4 diagnostics with line numbers, lazy rendering, self-contained export with source appendix. Install: dsh plugin --profile web add dsh-html-ui",
+  "version": "4.0.0",
   "license": "MIT",
   "type": "module",
   "main": "./lib/index.js",
@@ -11,9 +11,18 @@
   },
   "exports": {
     ".": "./lib/index.js",
-    "./client": "./lib/client.js"
+    "./client": "./lib/client.js",
+    "./validate": "./lib/validate.mjs",
+    "./feedback": "./lib/feedback.mjs",
+    "./skill": "./skills/dsh-html-ui/SKILL.md",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "dsh": ">=0.1.7-alpha.2 <0.3.0-0",
+    "node": "^22.19.0 || >=24.0.0"
   },
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -24,13 +33,20 @@
     }
   },
   "scripts": {
-    "prepublishOnly": "cd .. && npm run check && npm run build:bundle"
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check lib/validate.mjs && node --check lib/feedback.mjs",
+    "test": "node test/feedback.test.mjs && node test/validate.test.mjs && node test/parity.test.mjs && node test/load.test.mjs",
+    "verify:pack": "node scripts/verify-pack.mjs"
   },
   "files": [
     "lib",
     "skills",
+    "docs",
+    "test",
+    "scripts",
     "cordis.patch.yml",
-    "README.md"
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
   ],
   "keywords": [
     "dsh",
@@ -38,6 +54,8 @@
     "deepseek",
     "katex",
     "html-renderer",
-    "sandbox"
+    "sandbox",
+    "validation-receipt",
+    "fence-repair"
   ]
 }
