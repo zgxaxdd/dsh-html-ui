@@ -3,6 +3,41 @@
 本文件记录**仓库级**版本史（根 manifest 与部署包 `bundle/` 同步发版）。
 `bundle/CHANGELOG.md` 另有部署包自己的条目（含 `ruleSet`、回执协议等细节），两者版本号一致。
 
+## [4.1.0] - 2026-09-30
+
+性能 / 稳定性 / 可维护性升级。**围栏书写契约与对外行为不变**（v1–v4 写法全部有效）。
+完整条目（每项附实测数据、修复依据与回归用例）见 [bundle/CHANGELOG.md](bundle/CHANGELOG.md) 的 `[4.1.0]` 一节；此处只列要点：
+
+### 阻塞级
+- **校验器的灾难性回溯（ReDoS 形状）**：正则版的标签扫描、注释掩码、meta 解析与公式掩码全部可被 1MB 内的畸形输入拖到分钟级（`<a "` × k 在 80 KB 时 1633 ms、`<!--` × k 203 ms）。四个正则**全部换成手写线性扫描**（`scanTags` / `maskSource` / `parseMeta` / 告警探测 / `looksLikeHtmlDoc`），并给标签扫描加**预算**（`4×正文长度 + 4096` 步），超出即报 `E-SCAN-LIMIT` 而不是给出可能改错结构的"修复版"。修复后同一批 80 KB 输入 4.1 / 0.1 / 1.7 / 1.1 ms，1MB 最坏形状 ≤ 31 ms。
+- **等价性证明**：4000 条 `validateRaw` + 1500 条 `repairHtml` 与 v4.0.0 的正则实现逐条差分对比，**0 差异**；过程中抓出并修掉两个真实回归。CI 以 `test/validate.test.mjs` 的 6 条 ReDoS 形状用例防回归。
+
+### 性能（按实测收益排序）
+- 诊断行号：O(N) × 诊断数 → O(N) + O(log N)（1 MB 畸形围栏 + 200 条诊断：**153.4 ms → 4.1 ms**）。
+- 流式期间不再为"未定稿"代码块做整篇校验（256 KB 块每秒曾白烧 121 ms 主线程）。
+- 全文档扫描降为兜底（MutationObserver 已给出变更块），空闲仍为 0。
+- `hasTagAttribute` 二次方（932 KB 曾 17 487 ms → 10 ms）；`looksLikeHtmlDoc` 二次方（112 KB 曾 3575 ms → 4 ms）。
+- 资产路由：HEAD 不再回 body，补 `content-length` 与 `405 Allow`。
+
+### 正确性与边界
+- **HTML5 自闭合语义**：`<div/>` 在 HTML 内容里按开标签处理（只有外来内容 svg/math 才自闭合）——旧实现会把 `<div/>x</div>y` 的"修复版"改成 `<div/>xy`，**修复改变了渲染结果**。
+- 注释 / CDATA / bogus comment / PI 里的标签不再被当成真标签（旧实现会把 `</div>` 修复**塞进注释里**）。
+- raw-text 结束标签的其它合法形式（`</script/>`、`</script x>`）被正确识别。
+- `extractHtmlFences` 不再在四反引号 / `~~~` 字面块里"发明"围栏；围栏抽取支持 CRLF/CR 行尾（旧实现 CRLF 回复**一个围栏都抽不到**，自修环静默跳过）；开围栏支持 3 个以上反引号。
+- 自修环通道卫生：指纹白名单、修复版正文里的 ``` 不再提前闭合 steer 消息的代码块。
+- 工具入参深度上限、反馈环监听器判空（模型入参属不可信输入）。
+
+### 工程护栏
+- `tools/build.mjs`（v1 构建链，会 `rmSync(bundle/)`）**默认拒绝执行**，需显式 `DSH_HTML_UI_ALLOW_V1_BUILD=1`。
+- `node test/embed-validate.mjs --check`：内嵌校验段的同步从"跑一遍（永远成功）"变成可失败的检查，已接入 `npm test` 首步。
+- 调度节奏可注入（`installScheduler` 的 `sweepMs` / `sweepMsSlow` / `quietSweepsStop` / `fullSweepEvery`），线上默认值不变。
+- `npm test` 扩为 7 步；新增 `test/fence.test.mjs`（23 条）。
+
+### 评估中确认"不必动"的项
+- `katex.inline.css`（字体内联 data-URI）随 iframe srcdoc 内联：改外链需放宽 `font-src`/`style-src`，牺牲离线可用与 `connect-src 'none'`，收益仅是字符串长度——维持现状。
+- `.code-block` / `.code-block-small` 选择器在当前宿主已不存在，保留为其它宿主兜底。
+- `replaceLatex` 前进游标：当前规模下收益不可测，仅作最坏情况护栏保留。
+
 ## [4.0.0] - 2026-09-30
 
 自迭代升级（评估 → 开源调研 → 设计 → 实施）。上游参考：[omdsh-dev/dsh-genui](https://github.com/omdsh-dev/dsh-genui) main @ `ffb89fd`（v0.11.3）；完整决策记录见 [docs/V4-DESIGN.md](docs/V4-DESIGN.md) 与 [bundle/docs/V4-DESIGN.md](bundle/docs/V4-DESIGN.md)。

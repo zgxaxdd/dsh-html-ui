@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 440" width="920" height="440" role="img" aria-label="dsh-html-ui 架构：宿主半边、共享校验器、浏览器半边与自修反馈环">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arrowLoop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#bf6a02"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f8fa; }
+      .card { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+      .cardHost { fill: #eef4ff; stroke: #b6c8f0; stroke-width: 1.5; }
+      .cardShared { fill: #f2f0ff; stroke: #c9c2f2; stroke-width: 1.5; }
+      .cardClient { fill: #eefaf3; stroke: #b3ddc6; stroke-width: 1.5; }
+      .cardModel { fill: #fff8e8; stroke: #f0d9a8; stroke-width: 1.5; }
+      .title { font: 700 15px -apple-system, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; fill: #1f2328; }
+      .sub { font: 400 12px -apple-system, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; fill: #57606a; }
+      .body { font: 400 12px -apple-system, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; fill: #1f2328; }
+      .mono { font: 400 11.5px ui-monospace, Consolas, "Courier New", monospace; fill: #57606a; }
+      .link { stroke: #57606a; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .loop { stroke: #bf6a02; stroke-width: 1.8; fill: none; stroke-dasharray: 6 4; marker-end: url(#arrowLoop); }
+      .loopText { font: 400 11.5px -apple-system, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; fill: #bf6a02; }
+      .stage { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; rx: 6; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="920" height="440" rx="10"/>
+
+  <!-- 模型输出 -->
+  <rect class="cardModel" x="24" y="150" width="150" height="112" rx="10"/>
+  <text class="title" x="40" y="176">模型输出</text>
+  <text class="body" x="40" y="198">回复正文里的围栏</text>
+  <text class="mono" x="40" y="220">```dsh-html</text>
+  <text class="mono" x="40" y="238">```html</text>
+  <text class="sub" x="40" y="256">（只认正文，reasoning 不渲染）</text>
+
+  <!-- 宿主半边 -->
+  <rect class="cardHost" x="222" y="58" width="248" height="150" rx="10"/>
+  <text class="title" x="238" y="84">宿主半边</text>
+  <text class="mono" x="238" y="104">bundle/lib/index.js</text>
+  <text class="body" x="238" y="128">· dsh_html_check 工具</text>
+  <text class="body" x="238" y="148">· systemPrompt 硬契约</text>
+  <text class="body" x="238" y="168">· KaTeX 资产路由</text>
+  <text class="body" x="238" y="188">· installFenceFeedback</text>
+
+  <!-- 自修反馈环 -->
+  <rect class="cardHost" x="222" y="248" width="248" height="126" rx="10"/>
+  <text class="title" x="238" y="274">自修反馈环</text>
+  <text class="mono" x="238" y="294">bundle/lib/feedback.mjs</text>
+  <text class="body" x="238" y="318">· 回合末抽取围栏 → 指纹</text>
+  <text class="body" x="238" y="338">· 失败诊断 → 修正消息</text>
+  <text class="body" x="238" y="358">· agent/turn-stopping 边界 steer</text>
+
+  <!-- 共享校验器 -->
+  <rect class="cardShared" x="520" y="58" width="180" height="150" rx="10"/>
+  <text class="title" x="536" y="84">共享校验器</text>
+  <text class="mono" x="536" y="104">validate.mjs</text>
+  <text class="body" x="536" y="128">规则集 4：</text>
+  <text class="body" x="536" y="148">· 诊断 + 行号</text>
+  <text class="body" x="536" y="168">· repairHtml 修复版</text>
+  <text class="body" x="536" y="188">· 同构纯函数</text>
+
+  <!-- 浏览器半边 -->
+  <rect class="cardClient" x="520" y="248" width="376" height="166" rx="10"/>
+  <text class="title" x="536" y="274">浏览器半边</text>
+  <text class="mono" x="536" y="294">bundle/lib/client.js</text>
+  <rect class="stage" x="536" y="306" width="164" height="34"/>
+  <text class="body" x="546" y="328">① 围栏发现</text>
+  <rect class="stage" x="716" y="306" width="164" height="34"/>
+  <text class="body" x="726" y="328">② 渲染前校验</text>
+  <rect class="stage" x="536" y="352" width="164" height="34"/>
+  <text class="body" x="546" y="374">③ 沙箱 iframe 渲染</text>
+  <rect class="stage" x="716" y="352" width="164" height="34"/>
+  <text class="body" x="726" y="374">④ 高度 / 工具栏 / 导出</text>
+  <text class="sub" x="536" y="404">sandbox="allow-scripts" · CSP default-src 'none'（禁网 / 禁表单 / 禁父页）</text>
+
+  <!-- 连接：模型 → 宿主 -->
+  <path class="link" d="M 174 206 L 222 133"/>
+  <!-- 宿主 → 校验器 -->
+  <path class="link" d="M 470 133 L 520 133"/>
+  <!-- 校验器 → 客户端 -->
+  <path class="link" d="M 610 208 L 610 248"/>
+  <!-- 反馈环 → 校验器 -->
+  <path class="link" d="M 470 300 L 495 300 L 495 208 L 520 208"/>
+  <!-- 浏览器 → 反馈环（回路） -->
+  <path class="loop" d="M 520 372 L 208 372 L 208 290 L 222 290"/>
+  <text class="loopText" x="232" y="392">渲染失败 → 诊断回传 → 同回合重发修正围栏</text>
+  <text class="loopText" x="232" y="410">（每回合一次 / 每围栏一次 / 子代理不触发）</text>
+
+  <!-- 底部说明 -->
+  <text class="sub" x="24" y="424">同一份规则集：模型侧 dsh_html_check、宿主自修环、浏览器端渲染前校验共用 —— parity 测试逐用例锁死一致性。</text>
+</svg>

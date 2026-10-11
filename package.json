@@ -1,13 +1,22 @@
 {
   "name": "dsh-html-ui",
-  "version": "4.0.0",
-  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — v4: dsh_html_check pre-render validation with repaired_html receipts, bounded same-turn fence repair feedback loop, ruleSet 4 diagnostics, lazy rendering, self-contained export. The deployable DSH plugin lives in bundle/ (hand-maintained since v2.0.0).",
+  "version": "4.1.0",
+  "private": true,
+  "description": "Inline HTML + KaTeX renderer for DeepSeek Harness (DSH) chats — v4: dsh_html_check pre-render validation with repaired_html receipts, bounded same-turn fence repair feedback loop, ruleSet 4 diagnostics, lazy rendering, self-contained export. This root manifest is the private dev shell; the publishable DSH plugin lives in bundle/ (hand-maintained since v2.0.0) and is released via `npm run publish:bundle`.",
   "license": "MIT",
+  "author": "zgxaxdd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zgxaxdd/dsh-html-ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zgxaxdd/dsh-html-ui/issues"
+  },
+  "homepage": "https://github.com/zgxaxdd/dsh-html-ui#readme",
   "type": "module",
   "files": [
     "bundle",
     "dsh-html-client.js",
-    "vendor/katex",
     "skills/dsh-html-ui/SKILL.md",
     "docs",
     "README.md",
@@ -34,7 +43,7 @@
     "vitest": "^5.0.0"
   },
   "engines": {
-    "dsh": ">=0.1.7-alpha.2 <0.3.0-0",
+    "dsh": ">=0.1.7-alpha.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0",
     "node": "^22.19.0 || >=24.0.0"
   },
   "keywords": [

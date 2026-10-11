@@ -103,7 +103,7 @@ description: 当回复内容用纯文字难以表达时（结构图/流程图、
 **E · 终端日志** —— 命令/日志/调试记录域：
 
 ```html
-<div class="tm"><div><span class="p">$</span> dsh plugin --profile web add dsh-html-ui</div><div class="cm"># 输出：已安装 dsh-html-ui@4.0.0（link）</div><div class="er">warn: 重启 dsh web 后生效</div></div>
+<div class="tm"><div><span class="p">$</span> dsh plugin --profile web add dsh-html-ui</div><div class="cm"># 输出：已安装 dsh-html-ui@4.1.0（link）</div><div class="er">warn: 重启 dsh web 后生效</div></div>
 <style>.tm{background:rgba(10,14,24,.94);border:1px solid rgba(52,211,153,.25);border-radius:10px;padding:12px 14px;color:#a7f3d0;font:12.5px/1.7 ui-monospace,Consolas,monospace}.tm .p{color:#34d399}.tm .cm{color:#64748b}.tm .er{color:#fb7185}</style>
 ```
 

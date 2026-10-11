@@ -5,6 +5,13 @@ on:
     branches: [master, main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -18,11 +25,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Syntax (host + client + shared + feedback)
+      # bundle/ 是部署真相源（也是唯一的 npm 发布物）；根 scripts 只是委托壳，
+      # 因此所有命令都在 bundle/ 里跑，避免再出现"根目录没有 scripts/"这类路径漂移。
+      - name: Syntax (host + client + shared validator + feedback loop)
+        working-directory: bundle
         run: npm run check
-      - name: Tests (feedback + validate + parity + load)
+      - name: Tests (embed + fence + feedback + validate + parity + load + client-apply)
+        working-directory: bundle
         run: npm test
-      - name: Pack self-check
+      - name: Pack self-check (real tarball, --keep)
+        working-directory: bundle
         run: node scripts/verify-pack.mjs --keep
 
   windows-pack:
@@ -33,7 +45,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Windows pack (files/exports path + case sanity)
+      # 必须打 bundle/ 的包（发布物），不是仓库根的 v1 遗留壳。
+      - name: Windows syntax + tests
+        working-directory: bundle
         run: |
-          npm pack --json
-          node scripts/verify-pack.mjs
+          npm run check
+          npm test
+      - name: Windows pack (files/exports path + case sanity)
+        working-directory: bundle
+        run: node scripts/verify-pack.mjs

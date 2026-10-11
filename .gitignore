@@ -1,13 +1,20 @@
-# logs / temp
-*.tmp
-*.log
-node_modules/
-test-results/
-playwright-report/
+# 依赖与构建产物
 node_modules/
 coverage/
+test-results/
+playwright-report/
 
-# v4 bundle publish artifacts
+# 日志与临时文件
+*.log
+*.tmp
+.tmp-*/
+
+# 打包自检产物（bundle/scripts/verify-pack.mjs）
 *.tgz
 .verify-pack/
 .verify-pack-*/
+
+# 操作系统噪声
+.DS_Store
+Thumbs.db
+desktop.ini

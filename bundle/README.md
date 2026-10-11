@@ -1,6 +1,6 @@
-# dsh-html-ui v4.0.0（DSH profile bundle）
+# dsh-html-ui v4.1.0（DSH profile bundle）
 
-在 DeepSeek Harness 聊天流内联渲染任意 HTML 的插件：` ```html `（或 ` ```dsh-html `）围栏 → 沙箱 iframe 真渲染（本地交互脚本、块级 KaTeX 公式、主题自适应、事件驱动高度）。v3 起模型可通过 **`dsh_html_check` 工具在输出前自查围栏源码**；v4 起**修复版源码直接进回执**（`repaired_html`），且**渲染失败的围栏会在同一回合收到一次修正通知**，从"人肉复制修复提示"变成"模型自动重发对的围栏"。
+在 DeepSeek Harness 聊天流内联渲染任意 HTML 的插件：` ```html `（或 ` ```dsh-html `）围栏 → 沙箱 iframe 真渲染（本地交互脚本、块级 KaTeX 公式、主题自适应、事件驱动高度）。v3 起模型可通过 **`dsh_html_check` 工具在输出前自查围栏源码**；v4 起**修复版源码直接进回执**（`repaired_html`），且**渲染失败的围栏会在同一回合收到一次修正通知**，从"人肉复制修复提示"变成"模型自动重发对的围栏"。v4.1.0 修掉了校验器的灾难性回溯并重构热路径（**围栏书写契约与对外行为不变**）。
 
 ```sh
 dsh plugin --profile web add dsh-html-ui
@@ -16,10 +16,10 @@ dsh plugin --profile web remove dsh-html-ui
 
 | 项 | 声明 |
 |---|---|
-| 目标宿主 | `@deepseek-ai/dsh >= 0.1.7-alpha.2 < 0.3.0-0`（契约在 0.1.7 与 0.2.x 类型声明上逐项复核） |
+| 目标宿主 | `@deepseek-ai/dsh >=0.1.7-alpha.2 <0.2.0-0 \|\| >=0.2.0-rc.1 <0.3.0-0`（0.1.7-alpha.2 与桌面端 0.2.0-rc.2 逐项复核；注意 semver 预发布规则：`<0.3.0-0` 单独用会排除全部 0.2.x 预发布版） |
 | Node | `^22.19.0 \|\| >= 24.0.0`（`dsh plugin` 依赖 pnpm ≥11.7） |
 | 宿主契约 | `window.__ModuleLoader__.load` · `dsh.bundle.patch` · `dsh.client.*` · `systemPrompt.section` · `systemPrompt.getSectionOrder` · `skills.registerProvider` · **`tools.register`** · `webServer.register` · `ctx.reflect.get` · `internal/service` · **`session/event` · `session/disposed` · `agent/turn-stopping` · `agent.steer`** |
-| DOM 契约 | `.md-code-block`/`.code-block`/`.code-block-small` · `data-streaming` · `data-chat-anchor-key` · `--dsw-alias-*` |
+| DOM 契约 | `.md-code-block`（宿主当前唯一命中的代码块表面；`.code-block`/`.code-block-small` 已不存在于 0.1.7/0.2.0-rc.2，仅作兼容兜底保留） · `data-streaming` · `data-chat-anchor-key` · `data-chat-flow-kind` · `--dsw-alias-*` |
 | 兼容承诺 | **v1/v2/v3 围栏写法零破坏**；v4 新能力（meta `full`、`repaired_html`、自修通知）全部可选/兜底 |
 
 ## v4 能力总览
@@ -30,7 +30,7 @@ dsh plugin --profile web remove dsh-html-ui
 4. **`repairHtml()` 自动修复**：删除多余闭合标签、补齐未闭合标签（含 `script/style` raw-text）；产出"可直接采用"的修复版，注入诊断条「复制修复提示」与回执 `repaired_html`。
 5. **白名单式无标签回退**（客户端）：只放行宿主"通用代码块"标签（Code / Code block / 代码块）且正文完整通过 render 前校验的围栏——不再因为"长得像 HTML"就接管普通代码块。借鉴 dsh-genui `isGenericGenuiFence`。
 6. **围栏位置红线**：常驻契约明确"围栏只写回答正文，写在 reasoning/思考块里不渲染"（dsh-genui 同款真实教训）。
-7. **systemPrompt 节序自适应**：优先 `getSectionOrder('STRUCTURED_OUTPUT')`，取不到回退 106。
+7. **systemPrompt 节序自适应**：优先 `getSectionOrder('STRUCTURED_OUTPUT')`，取不到回退 9900（与 0.1.7-alpha.2 / 0.2.0-rc.2 实测值一致）。
 8. 既有能力：last-good 保留上次成功渲染、懒渲染（IntersectionObserver）、自适应扫描（1s→4s 退避）、多表面围栏发现、自包含导出（随附源码）、en/zh 本地化、无障碍补全。
 
 ## 架构（两半 + 共享规则集 + 反馈环）
@@ -71,12 +71,25 @@ dsh plugin --profile web remove dsh-html-ui
 
 ```sh
 npm run check        # 语法（index/client/validate/feedback）
-npm test             # feedback + validate（v4 含 repairHtml）+ parity（双实现 29 例）+ load（工具/版本/反馈环/schema/skill 范例）
-node test/embed-validate.mjs   # 修改 lib/validate.mjs 后同步进 client.js
+npm test             # 7 步：embed-validate --check + fence + feedback + validate + parity + load + client-apply
+node test/embed-validate.mjs   # 修改 lib/validate.mjs 后同步进 client.js（--check 模式已接入 npm test 首步）
 npm run verify:pack  # 打真 tarball 自检（必含清单/禁止清单/体积上限）
 ```
 
 全局调试：`window.__dshHtmlUi.stats()` / `.validate(raw)` / `.repair(raw)`。
+
+## 安全
+
+本插件渲染**模型生成、因而不可信**的 HTML。围栏内容运行在内层 `sandbox="allow-scripts"` 的 iframe 中
+（无 `allow-same-origin`），CSP `default-src 'none'` 禁网络、禁表单、禁弹窗、禁父页；渲染前先过共享校验器，
+超限输入降级为源码视图。**威胁模型、残余风险与漏洞上报渠道见仓库根
+[SECURITY.md](https://github.com/zgxaxdd/dsh-html-ui/blob/master/SECURITY.md)**。
+
+## 第三方组件
+
+随包分发 **KaTeX 0.18.5**（MIT，Copyright (c) 2013-2020 Khan Academy and other contributors），
+位于 `lib/assets/katex/`（该目录内含 `LICENSE` / `VERSION` / `SHA256SUMS`）。
+详见仓库根 [NOTICE](https://github.com/zgxaxdd/dsh-html-ui/blob/master/NOTICE)。
 
 ## 从 v3 升级
 

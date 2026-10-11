@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（请走私密通道）
+    url: https://github.com/zgxaxdd/dsh-html-ui/security/advisories/new
+    about: 沙箱逃逸、注入、CSP 绕过等请走 GitHub 私有漏洞上报，不要在公开 issue 里贴可利用的 PoC。

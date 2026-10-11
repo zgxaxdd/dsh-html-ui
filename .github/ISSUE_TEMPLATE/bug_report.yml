@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 围栏没有渲染 / 渲染结果不对 / 插件报错
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。**渲染类问题请务必附上最小可复现的围栏源码**——没有它我们基本无法定位。
+        安全问题请不要走这里，见 [SECURITY.md](../blob/master/SECURITY.md)。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 你期望看到什么，实际看到了什么？
+      placeholder: |
+        期望：这条围栏渲染成一张卡片。
+        实际：它仍然是代码块 / 渲染出来是空白 / 控制台报错。
+    validations:
+      required: true
+
+  - type: textarea
+    id: fence
+    attributes:
+      label: 复现用的围栏源码
+      description: 请把围栏**整段**贴进来（含 ```dsh-html 那行）。能复现的最小版本最好。
+      render: markdown
+      placeholder: |
+        ```dsh-html
+        <div>最小复现</div>
+        ```
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本
+      description: 终端里跑 `dsh --version` 的输出
+      placeholder: 0.2.0-rc.2
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本
+      description: 控制台里 `window.__dshHtmlUi.stats()` 的 `version` 字段，或 profile 里 dsh-html-ui 的版本
+      placeholder: 4.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 浏览器与操作系统
+      placeholder: Chrome 141 / Windows 11 24H2
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: 控制台输出
+      description: 请贴 `window.__dshHtmlUi.stats()` 的结果，以及任何报错/警告（含 dsh web 终端侧的日志）
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认这不是"宿主 DOM 结构变更导致的接管失效"（即：插件装的是最新版、dsh web 已重启、浏览器已 Ctrl+F5 硬刷新、新开会话仍复现）
+          required: true
+        - label: 我已确认围栏写在**回答正文**里（写在 reasoning / 思考块里的围栏不会渲染，这是设计如此）
+          required: true

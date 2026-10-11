@@ -1,0 +1,85 @@
+name: release
+
+# 触发：推 v* tag（例如 `git tag v4.1.0 && git push origin v4.1.0`）。
+#
+# ⚠️ npm 发布需要仓库 Secret `NPM_TOKEN`（npm Automation token）：
+#     GitHub → Settings → Secrets and variables → Actions → New repository secret。
+#     没有配置该 secret 时，本工作流**仍然会跑完测试并创建 GitHub Release**，
+#     只跳过 `npm publish` 这一步（下面用 has_token 判断，不会因此失败）。
+#
+# 发布物是 bundle/ 子目录（唯一的 npm 包），不是仓库根。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Syntax
+        working-directory: bundle
+        run: npm run check
+
+      - name: Tests
+        working-directory: bundle
+        run: npm test
+
+      - name: Pack self-check (real tarball) + sha256
+        id: pack
+        working-directory: bundle
+        run: node scripts/verify-pack.mjs --keep
+
+      - name: Detect npm token
+        id: token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN}" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=npm publish skipped::未配置 NPM_TOKEN，本次只创建 GitHub Release。"
+          fi
+
+      - name: npm publish (provenance)
+        if: steps.token.outputs.has_token == 'true'
+        working-directory: bundle
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES_FILE="$(mktemp)"
+          {
+            echo "## dsh-html-ui ${{ github.ref_name }}"
+            echo
+            echo "变更记录见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md)。"
+            echo
+            echo '```sh'
+            echo "dsh plugin --profile web add dsh-html-ui"
+            echo '```'
+            echo
+            if [ -n "${{ steps.pack.outputs.sha256 }}" ]; then
+              echo "npm tarball sha256: \`${{ steps.pack.outputs.sha256 }}\`"
+            fi
+          } > "$NOTES_FILE"
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file "$NOTES_FILE" --verify-tag
