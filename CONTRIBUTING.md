@@ -79,7 +79,8 @@ npm test
 
 ## 6. 提交与 PR
 
-- 提交信息沿用本仓库既有风格：`fix:` / `feat:` / `docs:` / `test:` / `chore(release):` 加**中文**正文。
+- 提交信息沿用本仓库既有风格：`fix:` / `docs:` / `chore(release):` 是既有用法（另有 `ci:`、`enhance:`
+  与少量无前缀的历史提交），`feat:` / `test:` / `perf:` 按需新增。前缀后跟**中文**正文。
   一个提交讲清一件事；版本发布类提交写 `chore(release): vX.Y.Z —— <一句话>`。
 - PR 请说明：**动机**（要解决什么真实问题）、**改动面**（碰了哪些文件/契约）、
   **验证方式**（贴 `npm test` / `verify:pack` 的实际输出）。

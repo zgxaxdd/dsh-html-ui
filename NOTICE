@@ -13,8 +13,16 @@
   - `bundle/lib/assets/katex/` —— **随 npm 发布包分发**的资产（`katex.min.js`、`katex.min.css`、
     `katex.inline.css`（字体以 data-URI 内联）、`fonts/`、`LICENSE`、`VERSION`、`SHA256SUMS`）。
   - `vendor/katex/` —— 同一版本的上游固定副本，供 v1.0.0 构建链（`tools/build.mjs`）复制生成
-    `bundle/lib/assets/katex/`，并由 `tools/verify-sha256sums.mjs` 做完整性校验（校验清单即
-    `bundle/lib/assets/katex/SHA256SUMS`）。二者除 `katex.inline.css`（构建期生成）外逐文件一致。
+    `bundle/lib/assets/katex/`。完整性由 `tools/verify-sha256sums.mjs` 双向校验（列出即存在、
+    存在即列出），**必须指向本目录**：
+
+    ```sh
+    node tools/verify-sha256sums.mjs vendor/katex/SHA256SUMS vendor/katex
+    ```
+
+    两份 `SHA256SUMS` 内容相同（同一份 24 行清单），但 `bundle/lib/assets/katex/` 多一个构建期生成的
+    `katex.inline.css`，它不在清单里——把脚本指向发布包目录会报 `unlisted file` 并退出 1。
+    除该文件外，二者逐文件一致。
 - **版本**：0.18.5（见 `bundle/lib/assets/katex/VERSION`）
 - **许可**：MIT License
 - **版权**：Copyright (c) 2013-2020 Khan Academy and other contributors

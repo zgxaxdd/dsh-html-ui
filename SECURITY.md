@@ -28,8 +28,11 @@
 - **`postMessage` 严格配对**：iframe 高度消息只在 `ev.source === iframe.contentWindow` 时采纳，
   不接受来自其它窗口/iframe 的同名消息。
 - **渲染前校验**（`dsh_html_check` 与客户端内嵌的同一套规则集 4）：空内容、>1 MB、标签未闭合、
-  多余闭合标签、行数超限、HTML 骨架噪声等都在渲染前给出稳定错误码 + 行号 + 修复指令；
-  **超限输入直接降级为源码视图**，不进 iframe。
+  多余闭合标签、行数超限、HTML 骨架噪声等都在渲染前给出稳定错误码 + 行号 + 修复指令。
+  **只有 `E-…` 错误会挡住渲染**：>1 MB（`E-SIZE`）与畸形到超出扫描预算（`E-SCAN-LIMIT`）降级为
+  源码视图（>1 MB 的挂载点根本不建 iframe）；行数超限（`W-LINE-LIMIT`）只是警告，围栏照常渲染。
+  其它 `E-…` 错误默认进源码视图，但工具栏的「源码/预览」切换与「重载」会置 `renderAnyway`
+  强制渲染——这是给用户的逃生通道，不是绕过校验的自动路径。
 - **不可信输入的解析成本有上界**：标签扫描带预算（`4 × 正文长度 + 4096` 步），畸形到超出预算时报
   `E-SCAN-LIMIT` 而不是继续扫描；1 MB 以上的输入在掩码/扫描之前就短路返回。v4.1.0 已消除全部
   灾难性回溯形状（详见 [CHANGELOG.md](CHANGELOG.md)）。
@@ -48,8 +51,16 @@
    `window.__dshHtmlUi.stats()` 的输出。
 3. **提示注入的边界**：插件无法判断"这条围栏是不是模型被诱导写出来的"。它能做的是限制这段 HTML
    能触及的范围（沙箱 + CSP + 校验），而不是判断它的意图。
-4. **KaTeX 资产随包分发**（0.18.5，MIT，Khan Academy）：资产完整性由 `SHA256SUMS` 记录，
-   可用 `node tools/verify-sha256sums.mjs` 复核。见 [NOTICE](NOTICE)。
+4. **KaTeX 资产随包分发**（0.18.5，MIT，Khan Academy）：上游副本 `vendor/katex/` 的完整性可双向复核
+   （列出即存在、存在即列出）：
+
+   ```sh
+   node tools/verify-sha256sums.mjs vendor/katex/SHA256SUMS vendor/katex
+   ```
+
+   发布包里的 `bundle/lib/assets/katex/` 与之一致，只多一个**构建期生成**的 `katex.inline.css`
+   （`tools/build.mjs` 把字体换成 data-URI 内联）。该文件不在清单内，所以**不要把这个脚本指向
+   发布包目录**——它会报 `unlisted file` 并退出 1。见 [NOTICE](NOTICE)。
 
 ## 上报漏洞
 
