@@ -22,7 +22,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { repairHtml, validateRaw } from "./validate.mjs";
+import { HTML_FENCE_MARKERS, fenceFor, repairHtml, validateRaw } from "./validate.mjs";
 
 /** 插件名：写入每条被环 steer 的消息 source，也用于识别自己的历史修正。 */
 export const FEEDBACK_PLUGIN_NAME = "dsh-html-ui";
@@ -33,25 +33,50 @@ export const MARKER_PREFIX = "[dsh-html-fence-repair #";
 /** 旧版插件写过的标记前缀（若曾命名不同，保持兼容读取）。 */
 export const LEGACY_MARKER_PREFIX = "[dsh-html 自修 #";
 
-/** 开围栏：info string 恰为 html / dsh-html / html-render（≤3 空格缩进）。 */
-const FENCE_OPEN = /^ {0,3}```[ \t]*(?:html|dsh-html|html-render)[ \t]*$/iu;
-/** 任意闭围栏。 */
-const FENCE_CLOSE = /^ {0,3}```[ \t]*$/u;
+/**
+ * 一条围栏行：≤3 空格缩进 + 3 个以上反引号 + 其余部分（info string 或空）。
+ * 反引号数量必须记录：```` ```html `` （四反引号）是合法开围栏，且只有 **≥ 开围栏长度**
+ * 的闭围栏才算闭合——否则"围栏里示范围栏"的写法会被内层三反引号提前截断。
+ */
+const FENCE_LINE = /^ {0,3}(`{3,})(.*)$/;
+/** 波浪线围栏（`~~~`）：里面的 ```html 同样是字面文本，必须整体跳过。 */
+const TILDE_LINE = /^ {0,3}(~{3,})(.*)$/;
 /** 单条回复检查的围栏数上限——回复是文本，不是语料库。 */
 const MAX_FENCES = 40;
 
 /** 一条回复里的一个 html 围栏。 */
 export function extractHtmlFences(text) {
-  const lines = String(text || "").split("\n");
+  // 行尾归一化：CRLF/CR 会让按行匹配整体失效（历史缺陷：CRLF 回复里的围栏一个都抽不到，
+  // 自修环于是静默跳过；Windows 上粘贴/中转的文本很容易带 \r\n）。
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
   const fences = [];
   let open = null;
+  let literal = null; // 正在跳过的字面块（反引号/波浪线，且 info 不是接管标记）
   for (let line = 0; line < lines.length; line++) {
     const current = lines[line] || "";
-    if (open === null) {
-      if (FENCE_OPEN.test(current)) open = { start: line + 1, index: fences.length + 1 };
+    const m = FENCE_LINE.exec(current);
+    const t = TILDE_LINE.exec(current);
+    const any = m || t;
+    if (literal !== null) {
+      // 字面块内容里的一切都是字面文本（含 ```html 这种示例），不能在其中"发明"围栏：
+      // 否则会给用户看到的是代码块的文本 steer 一次修复。
+      if (any && any[1][0] === literal.char && any[1].length >= literal.len && any[2].trim() === "") literal = null;
       continue;
     }
-    if (!FENCE_CLOSE.test(current)) continue;
+    if (open === null) {
+      if (m) {
+        const info = m[2].trim().toLowerCase();
+        if (HTML_FENCE_MARKERS.indexOf(info) !== -1) {
+          open = { start: line + 1, index: fences.length + 1, len: m[1].length };
+          continue;
+        }
+        literal = { char: "`", len: m[1].length };
+        continue;
+      }
+      if (t) literal = { char: "~", len: t[1].length };
+      continue;
+    }
+    if (!m || m[1].length < open.len || m[2].trim() !== "") continue;
     fences.push({ raw: lines.slice(open.start, line).join("\n"), closed: true, index: open.index });
     open = null;
     if (fences.length >= MAX_FENCES) return fences;
@@ -111,7 +136,9 @@ export function fenceCorrectionText(failures) {
   const repairedBlocks = failures
     .filter(function (f) { return f.repaired; })
     .map(function (f) {
-      return "fence=" + f.index + "\n```html\n" + f.repaired + "\n```";
+      // 围栏长度要大于修复正文里最长的反引号串，否则正文里的一行 ``` 会提前闭合代码块。
+      const fence = fenceFor(f.repaired);
+      return "fence=" + f.index + "\n" + fence + "html\n" + f.repaired + "\n" + fence;
     })
     .join("\n\n");
   const marker = failures.map(function (f) { return MARKER_PREFIX + f.fingerprint + "]"; }).join(" ");
@@ -194,7 +221,11 @@ export function markersIn(text) {
     const index = useLegacy ? legacy : current;
     const end = s.indexOf("]", index + prefix.length);
     if (end < 0) break;
-    out.push(s.slice(index + prefix.length, end));
+    const value = s.slice(index + prefix.length, end);
+    // 只接受十六进制指纹（当前格式是 sha256 前 12 位；放宽到 4~64 位以兼容历史标记）：
+    // 围栏正文里的任意文本都可能被原样搬进修正消息，不校验就会把模型写的字符串
+    // 当成"已修正指纹"记进 sessions 级 Set。十六进制过滤后仍无法伪造真实指纹（48 位前像）。
+    if (/^[0-9a-f]{4,64}$/.test(value)) out.push(value);
     cursor = end + 1;
   }
   return out;
@@ -225,10 +256,13 @@ export function installFenceFeedback(ctx, enabled) {
   };
 
   ctx.on("session/disposed", function (session) {
+    // 监听器抛错会被 cordis 记成一条噪声日志；session 形状来自宿主，防御性判空。
+    if (!session || session.id === undefined || session.id === null) return;
     sessions.delete(String(session.id));
   });
 
   ctx.on("session/event", function (session, event) {
+    if (!session || session.id === undefined || session.id === null) return;
     const sessionId = String(session.id);
     if (event && event.type === "assistant/message") {
       const text = textOfContent(event.data && event.data.message && event.data.message.content);

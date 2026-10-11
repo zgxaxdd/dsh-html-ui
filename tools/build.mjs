@@ -13,14 +13,34 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildSync } from 'esbuild'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bundleDir = join(root, 'bundle')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const version = pkg.version
 
+/*
+ * 硬闸门：本构建链停在 v1.0.0，而 bundle/ 自 v2.0.0 起是手工维护的部署真相源
+ * （见 README「仓库布局」）。旧链在第 33 行 `rmSync(bundleDir)` 会把 v2/v3/v4 的
+ * 全部成果删掉重建，且不会回填 —— 跑一次就毁掉部署物。这里直接拒绝执行；
+ * 确实想跑 v1 链请显式设 DSH_HTML_UI_ALLOW_V1_BUILD=1（并自行承担后果）。
+ */
+if (process.env.DSH_HTML_UI_ALLOW_V1_BUILD !== '1') {
+  console.error(
+    [
+      'build.mjs: 拒绝执行。',
+      '  bundle/ 自 v2.0.0 起为手工维护的部署真相源，本 v1 构建链会先 rmSync(bundle/) 再重建，',
+      '  且不会回填 v2+ 的内容 —— 执行即销毁当前部署物。',
+      '  如确实需要（仅追溯 v1 产物）：设 DSH_HTML_UI_ALLOW_V1_BUILD=1 后重跑。',
+    ].join('\n'),
+  )
+  process.exit(1)
+}
+
 /* 1. 页面级 IIFE（页面注入形态，保留入口行为） */
+// esbuild 延迟导入：静态 import 会被提升到闸门之前，导致"未装 devDependencies"时
+// 先报 MODULE_NOT_FOUND 而看不到拒绝原因。
+const { buildSync } = await import('esbuild')
 const iife = buildSync({
   entryPoints: [join(root, 'src', 'entry.js')],
   bundle: true, format: 'iife',

@@ -23,7 +23,9 @@ const t = (name, raw, expect) => {
 };
 
 // --- 结构校验（v2 用例保持） ---
-t("balanced", '<div><p>hi</p><span>x</span></div><svg viewBox="0 0 1 1"><line/></svg><path d="M0 0"/>', []);
+// 夹具修正：`<path/>` 原来写在 `<svg>` 之外。HTML5 只在**外来内容**（svg/math）里承认自闭合标记，
+// 所以那个 `<path>` 在浏览器里是真开标签且一直没闭合 —— 旧期望 [] 建立在错误模型上。
+t("balanced", '<div><p>hi</p><span>x</span></div><svg viewBox="0 0 1 1"><line/><path d="M0 0"/></svg>', []);
 t("unclosed", "<div><section><p>abc</section>", ["E-UNCLOSED"]);
 t("stray", "<div>a</span></div>", ["E-STRAY-CLOSE"]);
 t("optional-close", "<ul><li>a<li>b<li>c</ul>", []);
@@ -38,7 +40,66 @@ t("implicit-close", "<div><p>a<p>b</div>", []);
 t("structural-implicit", "<div><section>a<div>b</section></div>", ["W-IMPLICIT-CLOSE"]);
 t("raw-text-skip", "<div><style>a>b{color:red}</style><p>ok</p></div>", []);
 t("comment-lt", "<!-- <div> --><p>ok</p>", []);
+
+// --- 回归：raw-text 扫描器（无 g 标志的 closeRe 曾让 TAG_RE.lastIndex 回退 → 死循环 + OOM） ---
+t("raw-text-two-scripts", "<script>a=1</script><script>b=2</script>", []);
+t("raw-text-two-styles", "<style>a{}</style><style>b{}</style>", []);
+t("raw-text-script-then-style", "<script>a=1</script><style>b{}</style><div>ok</div>", []);
+t("raw-text-two-textareas", "<textarea>a</textarea><textarea>b</textarea>", []);
+t("raw-text-unterminated-script", "<div><script>a=1</div>", ["E-UNCLOSED", "E-UNCLOSED"]);
+// 可选闭合标签不能凭空闭合（旧实现把 </li> 无条件当 optional-close，漏报 E-STRAY-CLOSE）
+t("optional-close-stray", "<div></li></div>", ["E-STRAY-CLOSE"]);
+t("optional-close-stray-td", "<div></td></div>", ["E-STRAY-CLOSE"]);
+t("optional-close-paired-ok", "<table><tr><td>a</td></tr></table>", []);
 t("svg-stack", '<svg><g><circle cx="1" cy="1" r="1"/><rect width="2" height="2"/></g></svg>', []);
+
+// --- 回归：ReDoS 形状（正则版在这些输入上灾难性回溯，1MB 推算约 4.5 分钟） ---
+// "能活着返回"本身就是断言：修好之前这里会卡死或 OOM。
+const redos = (name, raw, expectCodes) => {
+  const t0 = Date.now();
+  const r = validateRaw(raw, DEFAULT_CONFIG);
+  const ms = Date.now() - t0;
+  const codes = r.errors.map((e) => e.code).concat(r.warnings.map((w) => w.code)).sort();
+  ok(name, JSON.stringify(codes) === JSON.stringify([...expectCodes].sort()) && ms < 5000, `ms=${ms} codes=${JSON.stringify(codes)}`);
+};
+redos("redos.unclosed-quotes", '<a "'.repeat(5000), []);
+redos("redos.unclosed-comment", "<!--".repeat(5000), []);
+redos("redos.unclosed-latex", "\\(".repeat(5000), []);
+redos("redos.meta-tail", "<!--dsh-html [" + " ".repeat(20000), []);
+// 无 `>` 的形状靠"lt 之后无 `>` 即整体收工"处理（线性、无须动用预算）。
+redos("redos.tag-start-run", "<a ".repeat(25000) + '"', []);
+// 有 `>` 但每个起点都要跑很远才会失败：只能靠扫描预算兜底，超出即截断并**报错**（不是警告）。
+redos("redos.far-gt-retry", "<a ".repeat(25000) + '"' + ">", ["E-SCAN-LIMIT"]);
+t("redos.script-run", "<script ".repeat(20000), []);
+
+// --- 回归：HTML5 自闭合语义（旧实现把非空元素的自闭合当 void，导致合法 HTML 被拒 +
+//     "修复版"改变渲染：<div/>x</div>y 的 y 会被搬进 div 里） ---
+t("selfclose.div-with-close", "<div/>x</div>y", []);
+t("selfclose.div-spaced", "<div />x</div>y", []);
+t("selfclose.custom-element", "<my-card/>a</my-card>b", []);
+t("selfclose.foreign-content", "<svg><rect/>a</rect></svg>", []);
+t("selfclose.html-outside-foreign-unclosed", "<path/>", ["E-UNCLOSED"]);
+{ // 修复版必须保持渲染语义：不再删掉那个闭合标签
+  const fix = repairHtml("<div/>x</div>y", DEFAULT_CONFIG);
+  ok("selfclose.repair-keeps-close", fix.repairable === false || fix.text === null || fix.text === "<div/>x</div>y", JSON.stringify(fix));
+}
+
+// --- 回归：注释/CDATA/bogus comment/PI 里的标签不得被当成真标签 ---
+t("mask.unterminated-comment", "<p>ok</p><!-- <div>", []);
+t("mask.cdata", "<![CDATA[ <div> ]]>", []);
+t("mask.bogus-comment", "<!x <div> >", []);
+t("mask.processing-instruction", "<?xml <div> ?>", []);
+
+// --- 回归：raw-text 结束标签的其它合法形式（HTML5 script-data end tag 规则） ---
+t("rawtext.close-slash", "<script>a</script/>b", []);
+t("rawtext.close-attr", "<script>a</script x>b", []);
+t("rawtext.close-style-slash", "<style>a</style/>b", []);
+
+// --- 回归：CR-only 行尾（旧实现只数 \n，@L 全变 1、W-LINE-LIMIT 永不触发） ---
+ok("cr-only.lines", validateRaw("<div>\r<section>\r</div>", DEFAULT_CONFIG).lines === 3, String(validateRaw("<div>\r<section>\r</div>", DEFAULT_CONFIG).lines));
+// 超限输入必须在掩码/扫描之前短路（否则扫描预算要按 1MB 付账）
+const oversize = validateRaw("x".repeat(DEFAULT_CONFIG.maxBytes + 1), DEFAULT_CONFIG);
+ok("oversize.short-circuit", oversize.errors.length === 1 && oversize.errors[0].code === "E-SIZE" && oversize.stats.tags === 0, JSON.stringify(oversize.errors));
 
 // --- v3 规则 ---
 t("iframe", "<div><iframe src=\"x\"></iframe></div>", ["W-IFRAME"]);

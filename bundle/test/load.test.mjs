@@ -58,7 +58,7 @@ if (!captured || captured.name !== host.CHECK_TOOL_NAME) throw new Error("tool n
 if (typeof captured.output?.render !== "function") throw new Error("tool output.render missing");
 if (typeof captured.execute !== "function") throw new Error("tool execute missing");
 if (typeof captured.presentCall !== "function" || typeof captured.presentResult !== "function") throw new Error("tool presentation missing (v4)");
-if (!section || section.order !== 106) throw new Error("systemPrompt section missing (order falls back to 106 without getSectionOrder)");
+if (!section || section.order !== host.DEFAULT_SECTION_ORDER) throw new Error("systemPrompt section missing (order falls back to DEFAULT_SECTION_ORDER without getSectionOrder)");
 for (const ev of ["session/event", "session/disposed", "agent/turn-stopping"]) {
   if (!events.includes(ev)) throw new Error("fence feedback loop did not subscribe: " + ev);
 }
@@ -128,3 +128,41 @@ console.log("skill html examples scanned:", exampleCount);
 if (exampleCount < 3) throw new Error("SKILL.md 范例数量不足，风格库/错误码表应带可复制范例");
 
 console.log("ALL LOAD CHECKS PASS");
+
+// 9. 资产路由生命周期：dispose 后不得留悬挂路由，插件重载（HMR/配置更新）必须能再次注册。
+// 旧实现直接 webServer.register 且不留 disposer：第二次 apply 会撞
+// `webserver: duplicate prefix route`，整个 host 半边加载失败。
+const routes = new Map();
+const lifecycleEffects = [];
+const webServer = {
+  register(route) {
+    const key = route.kind + " " + route.path;
+    if (routes.has(key)) throw new Error(`webserver: duplicate ${route.kind} route "${route.path}"`);
+    routes.set(key, route);
+    const dispose = () => routes.delete(key);
+    return dispose;
+  },
+};
+const lifecycleCtx = {
+  effect(fn) {
+    const d = fn();
+    if (typeof d === "function") lifecycleEffects.push(d);
+    return d;
+  },
+  inject(_names, cb) { cb(lifecycleCtx); },
+  reflect: { get: (name) => (name === "webServer" ? webServer : undefined) },
+  on() {},
+  systemPrompt: { section() {} },
+  skills: { registerProvider() {} },
+  tools: { register() { return () => {}; } },
+};
+const ROUTE_KEY = "prefix /plugins/dsh-html-ui/assets";
+host.apply(lifecycleCtx, {});
+if (!routes.has(ROUTE_KEY)) throw new Error("asset route not registered");
+if (lifecycleEffects.length === 0) throw new Error("plugin registered nothing through ctx.effect (route would leak)");
+for (const dispose of lifecycleEffects) dispose();
+lifecycleEffects.length = 0;
+if (routes.size !== 0) throw new Error("asset route leaked after dispose: " + [...routes.keys()].join(","));
+host.apply(lifecycleCtx, {});
+if (!routes.has(ROUTE_KEY)) throw new Error("asset route missing after plugin reload");
+console.log("asset route lifecycle ok (dispose -> clean -> reload)");

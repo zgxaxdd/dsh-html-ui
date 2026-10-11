@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { repairHtml, validateRaw } from "./validate.mjs";
 import { installFenceFeedback } from "./feedback.mjs";
 
-const VERSION = "4.0.0";
+const VERSION = "4.1.0";
 
 const F3 = String.fromCharCode(96, 96, 96);
 const ASSET_ROUTE_PATH = "/plugins/dsh-html-ui/assets";
@@ -42,7 +42,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const assetDir = join(here, "assets", "katex");
 
 async function serveAsset(req, res) {
-  if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405); res.end(); return }
+  if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405, { allow: "GET, HEAD" }); res.end(); return }
   let pathname
   try { pathname = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname) }
   catch { res.writeHead(400); res.end(); return }
@@ -57,9 +57,11 @@ async function serveAsset(req, res) {
     const body = readFileSync(full)
     res.writeHead(200, {
       "content-type": MIME[file.slice(file.lastIndexOf("."))] || "application/octet-stream",
+      "content-length": String(body.length),
       "cache-control": "public, max-age=31536000, immutable",
     })
-    res.end(body)
+    // HEAD 只回头：旧实现把整个 body 也发出去（272KB 的 katex.min.js 白传一遍）。
+    res.end(req.method === "HEAD" ? undefined : body)
   } catch { res.writeHead(404); res.end() }
 }
 
@@ -79,7 +81,12 @@ const SKILL_WHEN_TO_USE = "当回复内容用纯文字难以表达（结构图/�
 
 function bundledSkillProvider() {
   const raw = existsSync(bundledSkillPath) ? readFileSync(bundledSkillPath, "utf8") : "";
-  const end = raw.indexOf("---", 4);
+  // 取闭合 --- 之后的第一行正文：旧实现固定 slice(end + 5)，隐含"分隔行后必有一个空行"
+  // （LF=3+2 恰好对；CRLF 与"紧随正文"两种写法会各自多切/少切一个字符）。
+  const fmEnd = raw.indexOf("---", 4);
+  const bodyStart = fmEnd < 0 ? -1 : raw.indexOf("\n", fmEnd + 3);
+  const body = bodyStart < 0 ? raw : raw.slice(bodyStart + 1).replace(/^\r?\n/, "");
+  const end = fmEnd;
   const meta = {
     name: "dsh-html-ui",
     description: SKILL_DESCRIPTION,
@@ -95,13 +102,18 @@ function bundledSkillProvider() {
   return {
     name: SKILL_PROVIDER,
     list: () => Promise.resolve(end >= 0 ? [meta] : []),
-    get: () => Promise.resolve(Object.assign({}, meta, { content: end >= 0 ? raw.slice(end + 5) : raw })),
+    get: () => Promise.resolve(Object.assign({}, meta, { content: body })),
   };
 }
 
 /**
  * systemPrompt 节序：优先用宿主集中分配的结构化输出位（dsh-genui 同款做法，
- * 宿主改版后固定 order 可能落到错误分组），取不到再回退 106。
+ * 宿主改版后固定 order 可能落到错误分组）。
+ *
+ * 兜底值 9900 与实测宿主一致：0.1.7-alpha.2 与 0.2.0-rc.2 的
+ * `SECTION_ORDERS.STRUCTURED_OUTPUT` 都是 9900（HARNESS_SOURCE 10000 之前），
+ * 而本插件声明的最低宿主 0.1.7-alpha.2 已经提供 getSectionOrder，兜底分支只在
+ * 更老的宿主上生效——旧值 106 会插进 runtime-context 段（110/115/120）之前。
  */
 function sectionOrder(ctx) {
   try {
@@ -112,10 +124,12 @@ function sectionOrder(ctx) {
       if (typeof order === "number") return order;
     }
   } catch (e) { /* older host: no getSectionOrder */ }
-  return 106;
+  return DEFAULT_SECTION_ORDER;
 }
 
 const CHECK_TOOL_NAME = "dsh_html_check";
+/** 宿主缺 getSectionOrder 时的兜底节序；与 0.1.7-alpha.2 / 0.2.0-rc.2 的 STRUCTURED_OUTPUT 一致。 */
+const DEFAULT_SECTION_ORDER = 9900;
 const RECEIPT_ITEM_SCHEMA = {
   type: "object",
   properties: {
@@ -134,8 +148,13 @@ const RECEIPT_ITEM_SCHEMA = {
  *  - `{arguments: "..."}` / `{arguments: {html}}`（SDK 工具桥双层包装）；
  *  - `{spec: "..."}` / `{source: "..."}`（模型换名）。
  * 逐层剥开，保证校验器拿到真正的源码而不是包装层。
+ * 带深度上限：模型给出的 `{spec:{spec:{spec:…}}}` 这种病态包装不能把栈打穿
+ * （工具入参来自模型，属于不可信输入）。
  */
-function htmlOf(args) {
+const HTML_OF_MAX_DEPTH = 4;
+function htmlOf(args, depth) {
+  const level = depth || 0;
+  if (level > HTML_OF_MAX_DEPTH) return "";
   if (typeof args === "string") return args;
   if (typeof args !== "object" || args === null) return "";
   const record = args;
@@ -143,8 +162,8 @@ function htmlOf(args) {
     const v = record[key];
     if (typeof v === "string") return v;
   }
-  if ("arguments" in record) return htmlOf(record.arguments);
-  if ("spec" in record) return htmlOf(record.spec);
+  if ("arguments" in record) return htmlOf(record.arguments, level + 1);
+  if ("spec" in record) return htmlOf(record.spec, level + 1);
   return "";
 }
 
@@ -258,20 +277,22 @@ function apply(ctx, config) {
     skillCtx.skills.registerProvider(() => bundledSkillProvider());
   });
   ctx.inject(["tools"], (toolCtx) => {
-    ctx.effect(() => toolCtx.tools.register(createCheckTool()), "dsh-html-ui.tools.register()");
+    // effect 必须挂在注入作用域上：宿主重新提供 tools 时旧注册随作用域释放，
+    // 挂外层 ctx 会在重注入时留下重复注册（tools 层内重名会抛错）。
+    toolCtx.effect(() => toolCtx.tools.register(createCheckTool()), "dsh-html-ui.tools.register()");
   });
-  let assetsRegistered = false;
-  const tryRegisterAssets = (value) => {
-    if (assetsRegistered) return;
-    const webServer = value ?? ctx.reflect.get("webServer", false);
-    if (webServer === void 0) return;
-    webServer.register({ kind: "prefix", path: ASSET_ROUTE_PATH, handler: serveAsset });
-    assetsRegistered = true;
-  };
-  tryRegisterAssets(void 0);
-  ctx.on("internal/service", (name, value) => {
-    if (name === "webServer") tryRegisterAssets(value);
+  // 资产路由：ctx.inject 负责 webServer 的晚绑定与替换，webCtx.effect 负责释放。
+  // 旧写法直接 register 且不留 disposer：服务先于插件激活时能装上，但插件重载
+  // （HMR / 配置更新 / 插件管理面板开关）时旧路由不释放，第二次注册撞上
+  // `webserver: duplicate prefix route`，整个 host 半边加载失败（已实测复现）。
+  ctx.inject(["webServer"], (webCtx) => {
+    const webServer = webCtx.reflect.get("webServer");
+    if (webServer === void 0 || webServer === null) return;
+    webCtx.effect(
+      () => webServer.register({ kind: "prefix", path: ASSET_ROUTE_PATH, handler: serveAsset }),
+      "dsh-html-ui.webServer.register()",
+    );
   });
 }
 
-export { CHECK_TOOL_NAME, SECTION_TEXT, VERSION, apply, createCheckTool, inject, installFenceFeedback };
+export { CHECK_TOOL_NAME, DEFAULT_SECTION_ORDER, SECTION_TEXT, VERSION, apply, createCheckTool, inject, installFenceFeedback };

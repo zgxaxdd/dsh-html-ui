@@ -48,5 +48,15 @@ const section =
   END;
 
 const next = client.slice(0, beginAt) + section + client.slice(endAt + END.length);
-writeFileSync(clientPath, next, "utf8");
-console.log("embedded validate.mjs into client.js (", section.length, "chars )");
+// `--check`：只比对不落盘。CI 用它代替"跑一遍同步脚本"——后者永远成功（因为它自己
+// 把事情修好了），只有 check 模式才能发现"改了 validate.mjs 却忘了同步"。
+if (process.argv.includes("--check")) {
+  if (next !== client) {
+    console.error("FAIL client.js 的内嵌校验段与 lib/validate.mjs 不一致：请运行 node test/embed-validate.mjs 同步后再提交");
+    process.exit(1);
+  }
+  console.log("embedded validate section in sync (", section.length, "chars )");
+} else {
+  writeFileSync(clientPath, next, "utf8");
+  console.log("embedded validate.mjs into client.js (", section.length, "chars )");
+}

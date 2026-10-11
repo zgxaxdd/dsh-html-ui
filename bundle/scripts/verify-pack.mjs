@@ -88,11 +88,20 @@ if (packJsonPath) {
 } else {
   try {
     dest = mkdtempSync(join(tmpdir(), "dsh-html-ui-pack-"));
-    const raw = execFileSync(
-      process.platform === "win32" ? "npm.cmd" : "npm",
-      ["pack", "--pack-destination", dest, "--json"],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
-    );
+    // Windows：Node ≥20.12 起直接 spawn `npm.cmd`（.cmd/.bat）会抛 EINVAL
+    // （CVE-2024-27980 的修复），本仓库的 Windows CI 打包 job 因此必挂。
+    // 优先用 `npm run` 注入的 npm_execpath 交给同一个 node 执行（无 shell、路径带空格也安全），
+    // 直接 `node scripts/verify-pack.mjs` 时退回 npm.cmd + shell。
+    const npmCli = process.env.npm_execpath;
+    const useNodeCli = typeof npmCli === "string" && /\.(?:c|m)?js$/i.test(npmCli);
+    const command = useNodeCli ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
+    const args = useNodeCli ? [npmCli, "pack", "--pack-destination", dest, "--json"] : ["pack", "--pack-destination", dest, "--json"];
+    const raw = execFileSync(command, args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
+      ...useNodeCli ? {} : { shell: process.platform === "win32" },
+    });
     pack = JSON.parse(raw);
   } catch (error) {
     fail(`npm pack failed: ${error.message}`);

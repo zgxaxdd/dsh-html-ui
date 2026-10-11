@@ -27,19 +27,27 @@
     inferUnlabeled: true
     // v2：无语言标签的代码块按内容结构识别为 HTML（0.1.7 generic banner 兼容）
   });
+  /**
+   * 接管标记的统一判据。白名单来自共享校验段（HTML_FENCE_MARKERS，由
+   * lib/validate.mjs 同步进来）：发现器 / 接管器 / 宿主自修环因此不可能再各写一份而打架。
+   */
+  function isHtmlMarkerLabel(text) {
+    var l = (text || "").trim().toLowerCase();
+    return HTML_FENCE_MARKERS.indexOf(l) !== -1;
+  }
   function wantsTakeoverRaw(label, raw, config) {
     var cfg = config || DEFAULT_CONFIG;
     var l = (label || "").trim().toLowerCase();
     if (cfg.requireMarker) {
-      return l === "html-render" || l === "dsh-html";
+      // 严格模式：只认显式标记（`html` 太容易撞上普通代码块，故排除）。
+      return l === "dsh-html" || l === "html-render";
     }
-    return l === "html" || l === "dsh-html";
+    return isHtmlMarkerLabel(l);
   }
-  function buildCsp(allowRemoteImages, tab) {
+  function buildCsp(allowRemoteImages) {
     var img = "img-src data: blob:";
     if (allowRemoteImages) img += " https:";
-    var base = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " + img + "; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'; object-src 'none'";
-    return '<meta http-equiv="Content-Security-Policy" content="' + (tab ? base + "; sandbox allow-scripts" : base) + '">';
+    return '<meta http-equiv="Content-Security-Policy" content="' + ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " + img + "; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'; object-src 'none'") + '">';
   }
   function replaceLatex(raw, renderFn, config, phPrefix) {
     var cfg = config || DEFAULT_CONFIG;
@@ -47,14 +55,28 @@
       return full;
     };
     var PH = phPrefix || "\uE000" + Math.random().toString(36).slice(2, 8) + "-";
+    var text = String(raw);
+    // 公式区里的 <、> 不是标签（与 validate.mjs 的 maskSource 同序）。这里先算出公式
+    // 区间，标签掩码跳过"起点落在公式内"的匹配，其余保持原顺序——顺序很关键：
+    // pre/code/script/style 必须整体先被掩码，否则其中的 $$…$$ 会被渲染。
+    // 旧实现没有区间保护：`$$a < b$$` 会被 <[^>]*> 连公式一起吞掉，
+    // `$$x<y$$</div>` 还会把真实标记当成公式内容喂给 KaTeX 并从文档里删除。
+    var mathRanges = [];
+    var scanRe = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/g;
+    var scanMatch;
+    while ((scanMatch = scanRe.exec(text))) mathRanges.push([scanMatch.index, scanMatch.index + scanMatch[0].length]);
+    // 区间天然按出现顺序递增，标签匹配也是从左到右：游标只前进，判定整体 O(N+M)，
+    // 而不是每个标签都对全部公式做一次线性扫描（旧写法在 100 公式 × 300 标签时是这个量级的乘积）。
+    var mathCursor = 0;
+    function tagStartsInMath(index) {
+      while (mathCursor < mathRanges.length && mathRanges[mathCursor][1] <= index) mathCursor++;
+      var range = mathRanges[mathCursor];
+      return !!range && index >= range[0] && index < range[1];
+    }
+    // 手工扫描替代 `<script[\s\S]*?<\/script\s*>|…|<[^>]*>`：那组惰性 `[\s\S]*?`
+    // 在"只有开标签、没有闭标签"的畸形输入上会二次方回溯（与校验器那批正则同源）。
     var tokens = [];
-    var kept = raw.replace(
-      /<script[\s\S]*?<\/script\s*>|<style[\s\S]*?<\/style\s*>|<pre[\s\S]*?<\/pre\s*>|<code[\s\S]*?<\/code\s*>|<[^>]*>/gi,
-      function(m) {
-        tokens.push(m);
-        return PH + (tokens.length - 1) + PH;
-      }
-    );
+    var kept = protectTags(text, tokens, PH, tagStartsInMath);
     var texCount = 0;
     function run(s, display, full) {
       if (++texCount > cfg.TEX_MAX_COUNT) return full;
@@ -65,18 +87,88 @@
         return full;
       }
     }
-    kept = kept.replace(/\$\$([\s\S]+?)\$\$/g, function(m, s) {
-      return run(s, true, m);
-    }).replace(/\\\[([\s\S]+?)\\\]/g, function(m, s) {
-      return run(s, true, m);
-    }).replace(/\\\(([\s\S]+?)\\\)/g, function(m, s) {
-      return run(s, false, m);
-    });
+    // 没有公式标记就整段跳过三次全文 replace（实测 1MB 正文即使零公式也要白跑 ~21 ms）。
+    if (mathRanges.length > 0) {
+      kept = kept.replace(/\$\$([\s\S]+?)\$\$/g, function(m, s) {
+        return run(s, true, m);
+      }).replace(/\\\[([\s\S]+?)\\\]/g, function(m, s) {
+        return run(s, true, m);
+      }).replace(/\\\(([\s\S]+?)\\\)/g, function(m, s) {
+        return run(s, false, m);
+      });
+    }
+    if (tokens.length === 0) return kept;
     var re = new RegExp(PH + "(\\d+)" + PH, "g");
     return kept.replace(re, function(m, i) {
       var idx = +i;
       return idx >= 0 && idx < tokens.length ? tokens[idx] : m;
     });
+  }
+  /** replaceLatex 保护的标签名（内容里的 $$ 不能被当成公式渲染）。 */
+  var PROTECT_TAGS = { script: 1, style: 1, pre: 1, code: 1 };
+  // 本段自带 ASCII 工具：pure.js 不依赖 validate 段（后者由脚本同步生成，
+  // 两段之间不该有隐式依赖，否则单测里单独抽取 pure 段就会炸）。
+  function isAsciiNameChar(c) {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95 || c === 58 || c === 45;
+  }
+  function isAsciiSpace(c) {
+    return c === 32 || c === 9 || c === 10 || c === 13;
+  }
+  function indexOfAsciiCI(text, needleLower, from) {
+    var n = text.length;
+    var m = needleLower.length;
+    for (var i = from; i + m <= n; i++) {
+      var ok = true;
+      for (var j = 0; j < m; j++) {
+        if ((text.charCodeAt(i + j) | 32) !== (needleLower.charCodeAt(j) | 32)) { ok = false; break; }
+      }
+      if (ok) return i;
+    }
+    return -1;
+  }
+  /**
+   * 把 pre/code/script/style 整体与普通标签替换成占位符，返回替换后的文本。
+   * @param {string} src 源码
+   * @param {string[]} tokens 输出：被保护的原文
+   * @param {string} PH 占位符前缀
+   * @param {(index:number)=>boolean} skipAt 起点是否落在公式区内（落在区内则不保护）
+   */
+  function protectTags(src, tokens, PH, skipAt) {
+    var out = "";
+    var cursor = 0;
+    var i = 0;
+    var n = src.length;
+    while (i < n) {
+      var lt = src.indexOf("<", i);
+      if (lt < 0) break;
+      var j = lt + 1;
+      var closing = src.charCodeAt(j) === 47;
+      if (closing) j++;
+      var nameStart = j;
+      while (j < n && isAsciiNameChar(src.charCodeAt(j))) j++;
+      var name = src.slice(nameStart, j).toLowerCase();
+      var end = -1;
+      if (!closing && PROTECT_TAGS[name]) {
+        var close = indexOfAsciiCI(src, "</" + name, j);
+        if (close >= 0) {
+          var p = close + name.length + 2;
+          while (p < n && isAsciiSpace(src.charCodeAt(p))) p++;
+          if (src.charCodeAt(p) === 62) end = p + 1;
+        }
+      }
+      if (end < 0) {
+        var gt = src.indexOf(">", j);
+        if (gt < 0) break; // 无 `>` 的尾巴：原正则同样不匹配，保持原样
+        end = gt + 1;
+      }
+      if (!skipAt(lt)) {
+        out += src.slice(cursor, lt) + PH + tokens.length + PH;
+        tokens.push(src.slice(lt, end));
+        cursor = end;
+      }
+      i = end;
+    }
+    return out + src.slice(cursor);
   }
   function clampHeight(h, max) {
     return Math.max(40, Math.min(h, max));
@@ -115,6 +207,14 @@
   // src/validate.js —— v4 规则集（由 test/embed-validate.mjs 从 lib/validate.mjs 同步，勿手改本段）
 var RULESET_VERSION = 4;
 
+  /**
+   * 接管围栏的 info string 白名单 —— 单一事实源。
+   * 浏览器端（client.js 内嵌副本）与宿主自修环（feedback.mjs）必须一致：
+   * 两处各写一份正是历史上 `html-render` 判据打架的根因。
+   * @type {readonly string[]}
+   */
+  var HTML_FENCE_MARKERS = Object.freeze(["html", "dsh-html", "html-render"]);
+
 
 
   var FIX = Object.freeze({
@@ -131,6 +231,8 @@ var RULESET_VERSION = 4;
     "W-IFRAME": "移除 iframe（沙箱内嵌不生效），内容直接平铺",
     "W-LINE-LIMIT": "拆分围栏或精简内容（整页交付物在 meta 写 {\"full\":true} 放宽到 500 行）",
     "W-DOCTYPE": "移除 HTML 骨架（<!doctype>/<html>/<head>/<body>），围栏内直接写内容",
+    "W-SCAN-LIMIT": "源码畸形程度超出扫描预算（已截断校验），请检查未闭合的 < 与引号后重新输出",
+    "E-SCAN-LIMIT": "源码畸形到无法完成结构校验（已截断）；请检查未闭合的 < 与引号后重新输出",
   });
 
   const VOID_TAGS = { area: 1, base: 1, br: 1, col: 1, embed: 1, hr: 1, img: 1, input: 1, link: 1, meta: 1, param: 1, source: 1, track: 1, wbr: 1 };
@@ -138,31 +240,110 @@ var RULESET_VERSION = 4;
   /** 出现即视为"整页骨架"的标签（渲染器自带文档结构，骨架纯属噪声）。 */
   const SKELETON_TAGS = { html: 1, head: 1, body: 1 };
   const OPTIONAL_CLOSE = { p: 1, li: 1, dt: 1, dd: 1, rt: 1, rp: 1, optgroup: 1, option: 1, colgroup: 1, caption: 1, thead: 1, tbody: 1, tfoot: 1, tr: 1, td: 1, th: 1 };
-  const TAG_RE = /<(\/?)([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>/g;
-  const META_RE = /^\s*<!--\s*dsh-html\s*([\[{"][\s\S]*?)\s*-->/;
-  const LATEX_MASK_RE = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/g;
-  const COMMENT_MASK_RE = /<!--[\s\S]*?-->/g;
+  /*
+   * 扫描器全部手写、单趟线性 —— 这里刻意不用正则。
+   *
+   * 历史缺陷（实测）：`<(\/?)([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>`
+   * 这类"属性块可被多种方式切分"的模式在畸形输入上会灾难性回溯：无 `>` 的
+   * `'<a "'.repeat(k)` 20KB→110ms、40KB→428ms、80KB→1633ms（每次翻倍 4×），
+   * 1MB 推算约 4.5 分钟，而且判定结果是 `ok:true`。同样形状的还有
+   * `<!--[\s\S]*?-->`（80KB→203ms）、`\$\$[\s\S]+?\$\$|…`（80KB→360ms）、
+   * `^\s*<!--…[\s\S]*?)\s*-->`（5KB→11ms）。这些都在 1MB 上限内可达，
+   * 浏览器端会冻结标签页、宿主端会挂死进程 —— 与早期那个 scanTags 死循环同级。
+   * 手写扫描器每字符只访问一次，且失败即终止（见 scanTags 的说明）。
+   */
+  const LT = 60; /* < */ const GT = 62; /* > */ const SLASH = 47; /* / */ const BANG = 33; /* ! */
+  const DQUOTE = 34; const SQUOTE = 39; const DASH = 45; const BRACKET_L = 91; const BACKSLASH = 92; const PAREN_L = 40;
+
+  /** ASCII 大小写无关的 indexOf（不用 toLowerCase 整串拷贝：某些 Unicode 字符小写后长度会变）。 */
+  function indexOfAsciiCI(text, needleLower, from) {
+    const n = text.length;
+    const m = needleLower.length;
+    for (let i = from; i + m <= n; i++) {
+      let ok = true;
+      for (let j = 0; j < m; j++) {
+        if ((text.charCodeAt(i + j) | 32) !== (needleLower.charCodeAt(j) | 32)) { ok = false; break; }
+      }
+      if (ok) return i;
+    }
+    return -1;
+  }
+
+  function isNameStart(c) {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+  }
+  function isNameChar(c) {
+    return isNameStart(c) || (c >= 48 && c <= 57) || c === 95 /* _ */ || c === 58 /* : */ || c === 45 /* - */;
+  }
+  function isSpaceChar(c) {
+    return c === 32 || c === 9 || c === 10 || c === 13;
+  }
+  /**
+   * meta 头允许的前导空白：等价于原正则的 `^\s*`（含 BOM/NBSP/Unicode 空格）。
+   * 标签扫描用的 isSpaceChar 是 HTML 语义（只有 space/tab/LF/CR/FF），两者不能混用。
+   */
+  function isMetaSpace(c) {
+    if (c === 32 || (c >= 9 && c <= 13) || c === 160 || c === 0xfeff || c === 0x1680) return true;
+    if (c >= 0x2000 && c <= 0x200a) return true;
+    return c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000;
+  }
 
   function item(code, detail) {
     return { code, detail: detail == null || detail === "" ? "-" : String(detail), fix: FIX[code] || "" };
   }
 
-  /** 源码第几行（1-based）。行号让模型定位成本从"猜"降到"读"。 */
-  function lineOf(text, index) {
-    let line = 1;
-    for (let i = 0; i < index && i < text.length; i++) {
-      if (text.charCodeAt(i) === 10) line++;
-    }
-    return line;
+  /**
+   * 行号查询器（1-based）。行号让模型定位成本从"猜"降到"读"。
+   *
+   * 旧实现对每条诊断都从 0 线性扫到 index —— O(N) × 诊断数：1MB 围栏带 50 条
+   * 未闭合诊断就是约 50MB 的无谓扫描。这里一次性建行首表，之后二分查找 O(log N)。
+   * @param {string} text 源码
+   * @returns {(index:number)=>number} 下标 → 行号
+   */
+  function lineIndexFactory(text) {
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+    return function lineAt(index) {
+      if (!(index > 0)) return 1;
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid] <= index) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo + 1;
+    };
   }
 
-  /** 解析可选 meta 头 `<!--dsh-html {...}-->`。宽容：找不到 → found:false；JSON 坏 → error。 */
+  /**
+   * 解析可选 meta 头 `<!--dsh-html {...}-->`。宽容：找不到 → found:false；JSON 坏 → error。
+   *
+   * 手写扫描替代 `^\s*<!--\s*dsh-html\s*([\[{"][\s\S]*?)\s*-->`：后者的惰性体 + 尾部 `\s*`
+   * 在 `<!--dsh-html [` + 大量空格上每次扩张都要重扫一遍空格，实测 5KB 就要 11ms（四次翻倍 4×）。
+   * meta 头必须在正文最前面，所以扫描窗口天然很小：只在开头有限字符内找。
+   */
+  const META_SCAN_LIMIT = 4096;
   function parseMeta(raw) {
     const s = typeof raw === "string" ? raw : "";
-    const m = META_RE.exec(s);
-    if (!m) return { found: false, value: null, error: null };
+    let i = 0;
+    const n = Math.min(s.length, META_SCAN_LIMIT);
+    while (i < n && isMetaSpace(s.charCodeAt(i))) i++;
+    if (s.charCodeAt(i) !== LT || s.charCodeAt(i + 1) !== BANG) return { found: false, value: null, error: null };
+    if (s.slice(i + 2, i + 4) !== "--") return { found: false, value: null, error: null };
+    let p = i + 4;
+    while (p < n && isMetaSpace(s.charCodeAt(p))) p++;
+    if (indexOfAsciiCI(s, "dsh-html", p) !== p) return { found: false, value: null, error: null };
+    p += "dsh-html".length;
+    while (p < n && isMetaSpace(s.charCodeAt(p))) p++;
+    const first = s.charAt(p);
+    if (first !== "[" && first !== "{" && first !== '"') return { found: false, value: null, error: null };
+    const close = s.indexOf("-->", p);
+    if (close < 0) return { found: false, value: null, error: null };
+    let end = close;
+    while (end > p && isMetaSpace(s.charCodeAt(end - 1))) end--;
     try {
-      const value = JSON.parse(m[1]);
+      const value = JSON.parse(s.slice(p, end));
       if (value === null || typeof value !== "object" || Array.isArray(value)) {
         return { found: true, value: null, error: "meta must be a JSON object" };
       }
@@ -176,34 +357,206 @@ var RULESET_VERSION = 4;
    * 长度保持型掩码：$$…$$ 数学、注释整体替换为同长占位符。
    * 占位符不含 `<`/`>`，标签扫描因此不会误入公式与注释；
    * 替换保持字符数与换行位置，故 masked 下标可 1:1 映射回原文（repairHtml 依赖这一点）。
+   *
+   * 手写单趟扫描替代两个全局惰性正则（见文件顶部关于回溯的说明）：
+   * 两阶段顺序与原实现完全一致（先公式、后注释，注释在公式掩码之上再找），只是每阶段都是线性的。
    */
+  function maskBlock(chunk) {
+    return chunk.replace(/[^\n]/g, "\u0001");
+  }
+  /** 收集公式区（与 `\$\$[\s\S]+?\$\$|\\\[…|\\\(…` 等价，线性）。 */
+  function collectLatexRanges(s, out) {
+    const n = s.length;
+    let i = 0;
+    // 关键：某种闭合串一旦在当前位置之后完全不存在，它对后面任何起点也不存在 ——
+    // 用一个闩锁记住，避免每个起点都重扫到字符串末尾（那正是二次方的来源：
+    // 实测 `'\('.repeat(k)` 会在 80KB 上烧掉 2.5 秒）。
+    let noDollar = false;
+    let noBracket = false;
+    let noParen = false;
+    while (i < n) {
+      // 用原生 indexOf 找"最近的一个起手符"，替代逐字符 walk（1MB 正文上差好几毫秒）。
+      let at = -1;
+      let kind = 0;
+      if (!noDollar) {
+        const p = s.indexOf("$$", i);
+        if (p >= 0) { at = p; kind = 1; }
+      }
+      if (!noBracket) {
+        const p = s.indexOf("\\[", i);
+        if (p >= 0 && (at < 0 || p < at)) { at = p; kind = 2; }
+      }
+      if (!noParen) {
+        const p = s.indexOf("\\(", i);
+        if (p >= 0 && (at < 0 || p < at)) { at = p; kind = 3; }
+      }
+      if (at < 0) return;
+      const openerLen = 2;
+      const closer = kind === 1 ? "$$" : kind === 2 ? "\\]" : "\\)";
+      const end = s.indexOf(closer, at + openerLen);
+      if (end > at + openerLen) { out.push([at, end + openerLen]); i = end + openerLen; continue; }
+      // end < 0：后面再没有该闭合串；end === at+2：紧邻（如 `$$$$`），正则同样不匹配。
+      if (end < 0) {
+        if (kind === 1) noDollar = true;
+        else if (kind === 2) noBracket = true;
+        else noParen = true;
+      }
+      i = at + 1;
+    }
+  }
+  /** 收集注释区（与 `/<!--[\s\S]*?-->/g` 等价，线性）。 */
+  function collectCommentRanges(s, out) {
+    const n = s.length;
+    let i = 0;
+    while (i < n) {
+      const lt = s.indexOf("<", i);
+      if (lt < 0) return;
+      const c1 = s.charCodeAt(lt + 1);
+      if (c1 === BANG) {
+        if (s.startsWith("<!--", lt)) {
+          const end = s.indexOf("-->", lt + 4);
+          // 注释未闭合 → 一直到文末都是注释（HTML tokenizer 同款行为）。
+          // 旧实现直接放弃掩码，于是注释里的 `<div>` 被当成真标签 → 误报 E-UNCLOSED，
+          // 而"修复"还会把 </div> 塞进注释里。
+          if (end < 0) { out.push([lt, n]); return; }
+          out.push([lt, end + 3]);
+          i = end + 3;
+          continue;
+        }
+        // `<![CDATA[ … ]]>` / `<!x … >` / `<!doctype …>`：HTML 里都是 bogus comment，到第一个 `>` 为止。
+        const gt = s.indexOf(">", lt + 2);
+        if (gt < 0) { out.push([lt, n]); return; }
+        out.push([lt, gt + 1]);
+        i = gt + 1;
+        continue;
+      }
+      if (c1 === 63 /* ? */) {
+        // `<?xml … ?>` 等处理指令：HTML 里同样是 bogus comment。
+        const gt = s.indexOf(">", lt + 2);
+        if (gt < 0) { out.push([lt, n]); return; }
+        out.push([lt, gt + 1]);
+        i = gt + 1;
+        continue;
+      }
+      i = lt + 1;
+    }
+  }
+  function applyRanges(s, ranges) {
+    if (ranges.length === 0) return s;
+    let out = "";
+    let cursor = 0;
+    for (const [start, end] of ranges) {
+      if (start < cursor) continue;
+      out += s.slice(cursor, start) + maskBlock(s.slice(start, end));
+      cursor = end;
+    }
+    return out + s.slice(cursor);
+  }
   function maskSource(raw) {
-    let masked = String(raw || "").replace(LATEX_MASK_RE, function (mm) {
-      return mm.replace(/[^\n]/g, "\u0001");
-    });
-    masked = masked.replace(COMMENT_MASK_RE, function (mm) {
-      return mm.replace(/[^\n]/g, "\u0001");
-    });
-    return masked;
+    const s = String(raw || "");
+    const latex = [];
+    collectLatexRanges(s, latex);
+    // 注释必须在公式掩码之后找（原实现同序）：落在公式里的 `<!--` 已经被掩掉，不再算注释。
+    const afterLatex = applyRanges(s, latex);
+    const comments = [];
+    collectCommentRanges(afterLatex, comments);
+    return applyRanges(afterLatex, comments);
   }
 
   /**
    * 对掩码文本做一次标签扫描，产出事件序列（validateRaw 与 repairHtml 共用，
    * 保证"诊断"与"修复"看到的是同一份事实）。
-   * 事件：{kind:"open"|"close"|"stray"|"raw-unterminated", name, index, length}
+   * 事件：{kind:"open"|"close"|"void"|"stray"|"optional-close"|"ignored-void-close"|"implicit-close", name, index, length}
+   *
+   * 手写线性扫描：遇到"属性段扫到字符串末尾都没见到 `>`"就整体收工 —— 那段文本后面
+   * 的任何一个 `<` 同样不可能闭合出标签，继续尝试只会退化成二次方（正则版就是这样）。
    */
-  function scanTags(masked) {
+  function scanTags(masked, budget) {
     const events = [];
     const stack = [];
     let tagCount = 0;
-    TAG_RE.lastIndex = 0;
-    let mm;
-    while ((mm = TAG_RE.exec(masked))) {
-      const isClose = mm[1] === "/";
-      const name = mm[2].toLowerCase();
-      const selfClose = mm[4] === "/" || /\/\s*$/.test(mm[3] || "");
+    const n = masked.length;
+    /** 自闭合的外来元素名 → 计数：后续多余闭合按浏览器行为忽略，不报 E-STRAY-CLOSE。 */
+    const selfClosedForeign = Object.create(null);
+    /** 当前是否位于外来内容（svg/math）内部：那里自闭合标记才是有效的。 */
+    let foreignDepth = 0;
+    /** 把标签栈截断到 len，同时维护 foreignDepth。 */
+    function dropTo(len) {
+      for (let x = stack.length - 1; x >= len; x--) if (stack[x].foreign) foreignDepth--;
+      stack.length = len;
+    }
+    let i = 0;
+    let noMoreGt = false;
+    while (i < n) {
+      const lt = masked.indexOf("<", i);
+      if (lt < 0) break;
+      i = lt + 1;
+      let j = lt + 1;
+      let isClose = false;
+      if (masked.charCodeAt(j) === SLASH) { isClose = true; j++; }
+      if (!isNameStart(masked.charCodeAt(j))) continue;
+      const nameStart = j;
+      j++;
+      while (j < n && isNameChar(masked.charCodeAt(j))) j++;
+      const name = masked.slice(nameStart, j).toLowerCase();
+      // 属性段语义与正则 `((?:"[^"]*"|'[^']*'|[^>"'])*)(\/?)>` 完全一致：引号只能由成对的
+      // 引号段消费（[^>"'] 不含引号），未闭合的引号让本次匹配失败，然后像正则那样从下一个
+      // `<` 重试。重试是精确语义所必需的（差分模糊测试证明：从失败点继续会跳过中间的合法标签）。
+      //
+      // 但逐字符 walk 的常数比原生正则大得多（实测 1MB 良性正文 15.9 ms vs 正则 4.1 ms），
+      // 所以走"跳读快路径"：用原生 indexOf 直接跳到下一个 `>` 或引号，中间字符一个不看。
+      // 只有畸形输入才会退回逐字符路径，而那正是 budget 兜底的对象。
+      let k = j;
+      let closed = false;
+      let lastSignificant = -1;
+      while (k < n) {
+        if (budget && budget.left <= 0) { budget.exhausted = true; break; }
+        const gt = masked.indexOf(">", k);
+        if (gt < 0) {
+          // k 之后没有 `>` 了，但注意 k 可能已经被"引号整段跳读"推到了某个 `>` 之后 ——
+          // 所以只有**标签起点 lt 之后**也没有 `>` 时，才能断定后续起点同样无解并整体收工。
+          // （差分模糊测试给出的反例：`<a "a > b</b>` 里首起点失败，但 `</b>` 用的是被跳过的那个 `>`。）
+          if (budget) budget.left -= n - k;
+          if (masked.indexOf(">", lt) < 0) { noMoreGt = true; break; }
+          break;
+        }
+        if (budget) budget.left -= gt - k + 1; // 本次搜索实际扫过的距离都记入预算
+        const dq = masked.indexOf('"', k);
+        const sq = masked.indexOf("'", k);
+        let q = -1;
+        if (dq >= 0 && (sq < 0 || dq < sq)) q = dq;
+        else if (sq >= 0) q = sq;
+        if (q < 0 || q > gt) {
+          // 快路径：标签内没有引号 → 直接落在 `>` 上。
+          k = gt;
+          closed = true;
+          break;
+        }
+        // 慢路径：引号只能由成对引号消费；未闭合即本次匹配失败（随后从下一个 `<` 重试）。
+        const pair = masked.indexOf(masked[q], q + 1);
+        if (pair < 0) break;
+        lastSignificant = pair;
+        k = pair + 1;
+      }
+      if (budget && budget.exhausted) break;
+      if (noMoreGt) break;
+      if (!closed) {
+        // 本次不是标签（未闭合引号或没有 `>`）：继续找下一个 `<`（与正则一致）。
+        continue;
+      }
+      // selfClose：`>` 之前最后一个非空白字符是不是 `/`（等价于原正则的 mm[4]==="/" || /\/\s*$/）。
+      if (lastSignificant < k) {
+        let p = k - 1;
+        while (p > lt && isSpaceChar(masked.charCodeAt(p))) p--;
+        lastSignificant = masked.charCodeAt(p) === GT ? -1 : p;
+      }
+      const rawLength = k + 1 - lt;
+      const selfClose = lastSignificant >= 0 && masked.charCodeAt(lastSignificant) === SLASH;
+      // 下一个扫描位置必须在整个标签之后：属性段里可以出现 `<`（与原正则 [^>"'] 一致），
+      // 若不跳过就会把属性里的 `<` 当成新标签起点。
+      i = k + 1;
       tagCount++;
-      const ev = { kind: "open", name, index: mm.index, length: mm[0].length };
+      const ev = { kind: "open", name, index: lt, length: rawLength };
       if (isClose) {
         if (VOID_TAGS[name]) {
           ev.kind = "ignored-void-close";
@@ -211,14 +564,23 @@ var RULESET_VERSION = 4;
           continue;
         }
         if (OPTIONAL_CLOSE[name]) {
-          const oi = stack.lastIndexOf(name);
-          if (oi !== -1) stack.length = oi;
+          // 注意：stack 里放的是事件对象，`stack.lastIndexOf(name)` 永远返回 -1
+          // （字符串和对象恒不相等）——旧实现因此从未真正截断过栈，只是"看起来没事"。
+          const oi = findInStack(stack, name);
+          if (oi === -1) {
+            // 没有可配对的开放标签 = 多余闭合（可选闭合不等于可以凭空闭合）。
+            ev.kind = selfClosedForeign[name] ? "ignored-void-close" : "stray";
+            if (selfClosedForeign[name]) selfClosedForeign[name]--;
+            events.push(ev);
+            continue;
+          }
+          dropTo(oi);
           ev.kind = "optional-close";
           events.push(ev);
           continue;
         }
         if (stack.length && stack[stack.length - 1].name === name) {
-          stack.pop();
+          dropTo(stack.length - 1);
           ev.kind = "close";
           events.push(ev);
           continue;
@@ -228,7 +590,14 @@ var RULESET_VERSION = 4;
           const skipped = stack.slice(wi + 1).filter(function (n) { return !OPTIONAL_CLOSE[n.name]; });
           ev.kind = "implicit-close";
           ev.skipped = skipped;
-          stack.length = wi;
+          dropTo(wi);
+          events.push(ev);
+          continue;
+        }
+        // 自闭合的外来元素（<svg><rect/></svg>）后面再写 </rect>：浏览器按"忽略多余结束标签"处理。
+        if (selfClosedForeign[name]) {
+          selfClosedForeign[name]--;
+          ev.kind = "ignored-void-close";
           events.push(ev);
           continue;
         }
@@ -236,29 +605,60 @@ var RULESET_VERSION = 4;
         events.push(ev);
         continue;
       }
-      if (VOID_TAGS[name] || selfClose) {
+      if (VOID_TAGS[name]) {
+        ev.kind = "void";
+        events.push(ev);
+        continue;
+      }
+      if (selfClose && foreignDepth === 0) {
+        // HTML 内容里自闭合标记被解析器**忽略**：`<div/>x</div>` 里的 `</div>` 是合法闭合。
+        // 旧实现把它当 void，于是合法 HTML 被报 E-STRAY-CLOSE，而"修复"还会删掉那个闭合标签、
+        // 让后面的文本跑进 div 里 —— 修复版渲染结果与原意不同。
+        ev.kind = "open";
+      } else if (selfClose) {
+        // 外来内容（SVG/MathML）里自闭合有效：不压栈，并记住名字以便忽略后续多余闭合。
+        selfClosedForeign[name] = (selfClosedForeign[name] || 0) + 1;
         ev.kind = "void";
         events.push(ev);
         continue;
       }
       if (name === "p") {
-        while (stack.length && stack[stack.length - 1].name === "p") stack.pop();
+        while (stack.length && stack[stack.length - 1].name === "p") dropTo(stack.length - 1);
       } else if (OPTIONAL_CLOSE[name] && stack.length && stack[stack.length - 1].name === name) {
-        stack.pop();
+        dropTo(stack.length - 1);
+      }
+      if (name === "svg" || name === "math") {
+        ev.foreign = true;
+        foreignDepth++;
       }
       stack.push(ev);
       events.push(ev);
       if (RAW_TEXT_TAGS[name]) {
-        const closeRe = new RegExp("</" + name + "\\s*>", "i");
-        closeRe.lastIndex = TAG_RE.lastIndex;
-        const cm = closeRe.exec(masked);
-        if (!cm) {
-          // 未闭合的 raw-text 标签：保留在栈上（repairHtml 会按栈序补齐 </style>…），
-          // 停止继续扫描（raw-text 内容里的标签不是真标签）。
+        // raw-text 内容不是标记：跳到配对的闭标签之后继续。
+        // 手写查找（ASCII 大小写无关）替代 /<\/name\s*>/i —— 后者在这个位置每次都要
+        // 新建正则对象，且一旦写错标志位就会退化成"永远找到第一个闭标签"的死循环。
+        // 结束标签的合法形式：`</name` 后跟空白、`/` 或 `>`（HTML5 script-data end tag 规则），
+        // 之后再跳到它自己的 `>`；旧实现只认 `</name>` 与 `</name   >`。
+        const needle = "</" + name;
+        let at = k + 1;
+        let closeAt = -1;
+        for (;;) {
+          const idx = indexOfAsciiCI(masked, needle, at);
+          if (idx < 0) break;
+          const after = masked.charCodeAt(idx + needle.length);
+          if (after === GT || after === SLASH || isSpaceChar(after)) {
+            const gt = masked.indexOf(">", idx + needle.length);
+            if (gt >= 0) { closeAt = gt + 1; break; }
+          }
+          at = idx + 1;
+        }
+        if (closeAt < 0) {
+          // 未闭合 raw-text：保留在栈上（repairHtml 会按栈序补齐 </style>…），
+          // 停止扫描（后续文本都属于这个 raw-text 元素）。
           break;
         }
-        TAG_RE.lastIndex = cm.index + cm[0].length;
-        stack.pop();
+        i = closeAt;
+        dropTo(stack.length - 1);
       }
     }
     return { events, stack, tagCount };
@@ -271,29 +671,82 @@ var RULESET_VERSION = 4;
     return -1;
   }
 
+  /**
+   * 是否存在"某个 <tag …> 标签内满足条件"的情况，等价于 /<tag[^>]*COND/i 但不会回溯。
+   *
+   * 关键优化：每个 occurrence 的判定窗口是 [at, 下一个 `>`]，而更靠后的 occurrence 的窗口
+   * 一定是它的**子区间**；所以一次判定就覆盖了窗口内所有更靠后的 occurrence —— 判定完直接
+   * 跳到该 `>` 之后继续。没有 `>` 时窗口延伸到文末，同理一次判定即可收工。
+   * （旧写法对每个 occurrence 都从零 indexOf + slice 到文末：实测 `'<script '.repeat(k)`
+   *  932 KB 要 17.5 秒 —— 正是这一轮在别处刚清掉的那类二次方。）
+   */
+  function hasTagAttribute(s, tag, condition) {
+    const needle = "<" + tag;
+    const n = s.length;
+    let from = 0;
+    for (;;) {
+      const at = indexOfAsciiCI(s, needle, from);
+      if (at < 0) return false;
+      const after = s.charCodeAt(at + needle.length);
+      const boundary = after === GT || after === SLASH || isSpaceChar(after) || Number.isNaN(after);
+      if (!boundary) {
+        from = at + needle.length;
+        continue;
+      }
+      const gt = s.indexOf(">", at + needle.length);
+      const end = gt < 0 ? n : gt + 1;
+      if (condition.test(s.slice(at, end))) return true;
+      if (gt < 0) return false; // 窗口已到文末，后续 occurrence 的窗口都是它的子区间
+      from = gt + 1;
+    }
+  }
+
   function validateRaw(raw, config) {
     const cfg = config || DEFAULT_CONFIG;
     const errors = [];
     const warnings = [];
     const s = typeof raw === "string" ? raw : "";
     const meta = parseMeta(s);
-    const lines = s === "" ? 0 : s.split("\n").length;
+    // 行数按 CRLF/CR/LF 三种行尾计（旧实现只数 \n：CR-only 正文的 @L 全是 1、W-LINE-LIMIT 永不触发）。
+    const lines = s === "" ? 0 : s.split(/\r\n|\r|\n/).length;
     if (s.trim() === "") {
       errors.push(item("E-EMPTY", "-"));
       return { ok: false, ruleSet: RULESET_VERSION, errors, warnings, meta, stats: { bytes: 0, tags: 0 }, lines };
     }
-    if (s.length > cfg.maxBytes) errors.push(item("E-SIZE", s.length + "/" + cfg.maxBytes));
+    if (s.length > cfg.maxBytes) {
+      // 超限输入直接短路：后面每一步（掩码、扫描、告警探测）都是 O(N) 以上，
+      // 而对一个注定被拒的围栏继续分析只是把 4.5 分钟的回溯预算留给攻击面。
+      errors.push(item("E-SIZE", s.length + "/" + cfg.maxBytes));
+      return {
+        ok: false,
+        ruleSet: RULESET_VERSION,
+        errors,
+        warnings,
+        meta,
+        stats: { bytes: s.length, tags: 0 },
+        lines,
+      };
+    }
     if (meta.found && meta.error) warnings.push(item("W-META-INVALID", meta.error));
+    // 行首表按需构建：干净的 1MB 正文（0 诊断）本不该付 2 ms 去建一张没人查的表。
+    let lineIndex = null;
+    const lineAt = (index) => (lineIndex === null ? (lineIndex = lineIndexFactory(s)) : lineIndex)(index);
     const masked = maskSource(s);
-    const scan = scanTags(masked);
+    // 扫描预算：正常正文的标签扫描步数约等于正文长度，4 倍 + 4096 的余量足够；
+    // 只有"畸形到让正则二次方回溯"的那类输入才会触碰上限，届时截断并显式告警。
+    const budget = { left: 4 * s.length + 4096, exhausted: false };
+    const scan = scanTags(masked, budget);
+    // 必须是**错误**而不是警告：`ok` 是消费方的唯一门（fenceFailures 跳过 ok、kernel 据此挂载），
+    // 截断的结果不能冒充"已验证通过"—— 否则一个坏围栏会被静默接受、永远不进自修环。
+    if (budget.exhausted) errors.push(item("E-SCAN-LIMIT", s.length + "B"));
     for (const ev of scan.events) {
       switch (ev.kind) {
         case "stray":
-          errors.push(item("E-STRAY-CLOSE", ev.name + "@L" + lineOf(s, ev.index)));
+          errors.push(item("E-STRAY-CLOSE", ev.name + "@L" + lineAt(ev.index)));
           break;
         case "implicit-close": {
           const skipped = (ev.skipped || []).map(function (n) { return n.name; }).join(",");
-          if (skipped) warnings.push(item("W-IMPLICIT-CLOSE", skipped + "@L" + lineOf(s, ev.index)));
+          if (skipped) warnings.push(item("W-IMPLICIT-CLOSE", skipped + "@L" + lineAt(ev.index)));
           break;
         }
         default:
@@ -303,12 +756,15 @@ var RULESET_VERSION = 4;
     for (let i = scan.stack.length - 1; i >= 0; i--) {
       const ev = scan.stack[i];
       if (!OPTIONAL_CLOSE[ev.name]) {
-        errors.push(item("E-UNCLOSED", ev.name + "@L" + lineOf(s, ev.index)));
+        errors.push(item("E-UNCLOSED", ev.name + "@L" + lineAt(ev.index)));
       }
     }
-    if (/<script[^>]*\bsrc\s*=/i.test(s)) warnings.push(item("W-SCRIPT-EXT", "script[src]"));
+    // 告警探测：`<script[^>]*\bsrc\s*=` 这类"属性段扫到行尾"的正则在无 `>` 的畸形输入上
+    // 同样会二次方回溯（每个 `<script` 起点都扫到末尾）。改成"定位标签起点 → 截到下一个 > →
+    // 在这段内做局部匹配"，语义等价（[^>]* 本来就不允许跨 `>`），整体线性。
+    if (hasTagAttribute(s, "script", /\bsrc\s*=/i)) warnings.push(item("W-SCRIPT-EXT", "script[src]"));
     if (/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(|navigator\.sendBeacon|\bimport\s*\(/.test(s)) warnings.push(item("W-SCRIPT-NET", "network-api"));
-    if (/<img[^>]*\bsrc\s*=\s*["']?https?:/i.test(s) && !cfg.allowRemoteImages) warnings.push(item("W-EXT-IMG", "img[src]"));
+    if (!cfg.allowRemoteImages && hasTagAttribute(s, "img", /\bsrc\s*=\s*["']?https?:/i)) warnings.push(item("W-EXT-IMG", "img[src]"));
     if (/\son[a-z]+\s*=/i.test(s)) warnings.push(item("W-INLINE-EVENT", "on*="));
     if (/<iframe[\s>]/i.test(s)) warnings.push(item("W-IFRAME", "iframe"));
     if (/<!doctype[\s>]|<\s*html[\s>]|<\s*head[\s>]|<\s*body[\s>]/i.test(s)) warnings.push(item("W-DOCTYPE", "skeleton"));
@@ -352,17 +808,22 @@ var RULESET_VERSION = 4;
     if (unrecoverable.length > 0) {
       return { repairable: false, text: null, repairs: [], unrecoverable };
     }
+    // 同 validateRaw：行首表按需构建（修复路径大多数情况下只查几条诊断）。
+    let lineIndex = null;
+    const lineAt = (index) => (lineIndex === null ? (lineIndex = lineIndexFactory(s)) : lineIndex)(index);
     const masked = maskSource(s);
-    const scan = scanTags(masked);
+    const budget = { left: 4 * s.length + 4096, exhausted: false };
+    const scan = scanTags(masked, budget);
+    if (budget.exhausted) {
+      // 扫描被截断时不产出"修复版"：修复表是按事件序列算的，截断后可能改错结构。
+      return { repairable: false, text: null, repairs: [], unrecoverable: ["E-REPAIR-INCOMPLETE"] };
+    }
     const drops = [];
     const repairs = [];
     for (const ev of scan.events) {
-      if (ev.kind === "stray") {
-        drops.push([ev.index, ev.index + ev.length]);
-        repairs.push("remove-stray-close:" + ev.name + "@L" + lineOf(s, ev.index));
-      } else if (ev.kind === "raw-unterminated") {
-        repairs.push("append-close:" + ev.name + "@L" + lineOf(s, ev.index));
-      }
+      if (ev.kind !== "stray") continue;
+      drops.push([ev.index, ev.index + ev.length]);
+      repairs.push("remove-stray-close:" + ev.name + "@L" + lineAt(ev.index));
     }
     let text = s;
     for (let i = drops.length - 1; i >= 0; i--) {
@@ -373,7 +834,7 @@ var RULESET_VERSION = 4;
       const ev = scan.stack[i];
       if (VOID_TAGS[ev.name]) continue;
       text += "</" + ev.name + ">";
-      repairs.push("append-close:" + ev.name + "@L" + lineOf(s, ev.index));
+      repairs.push("append-close:" + ev.name + "@L" + lineAt(ev.index));
     }
     const after = validateRaw(text, config);
     const done = after.errors.length === 0;
@@ -385,19 +846,47 @@ var RULESET_VERSION = 4;
     };
   }
 
+  /** `<style …>…</style>` 是否存在（线性；替代贪婪的 /<style[\s>][\s\S]*<\/style>/i）。 */
+  function hasStyleElement(s) {
+    let from = 0;
+    for (;;) {
+      const at = indexOfAsciiCI(s, "<style", from);
+      if (at < 0) return false;
+      const after = s.charCodeAt(at + 6);
+      if (after === GT || isSpaceChar(after)) {
+        const close = indexOfAsciiCI(s, "</style", at + 6);
+        // 之后没有 `</style` 了：更靠后的 `<style` 同样找不到对方，一次收工（避免二次方）。
+        if (close < 0) return false;
+        let p = close + 7;
+        while (p < s.length && isSpaceChar(s.charCodeAt(p))) p++;
+        if (s.charCodeAt(p) === GT) return true;
+        from = close + 7;
+        continue;
+      }
+      from = at + 6;
+    }
+  }
+
   /** 无语言标签代码块的结构化识别（0.1.7 generic banner 兼容）。 */
   function looksLikeHtmlDoc(raw) {
     const s = (raw || "").trim();
     if (s.length < 40 || s.charAt(0) !== "<") return false;
     if (/^<!doctype\s+html|^<html[\s>]/i.test(s)) return true;
-    if (/<style[\s>][\s\S]*<\/style>/i.test(s) && /<[a-zA-Z][\w:-]*(\s|>|\/)/.test(s)) return true;
+    if (hasStyleElement(s) && /<[a-zA-Z][\w:-]*(\s|>|\/)/.test(s)) return true;
     return false;
   }
 
-  /**
-   * 由回执生成模型可读的修复提示（诊断条"复制修复提示"按钮与围栏反馈环共用）。
+  /** 由回执生成模型可读的修复提示（诊断条"复制修复提示"按钮与围栏反馈环共用）。
    * repairedHtml 非空时附上可直接采用的修复版源码（v4：闭环最后 100 米）。
    */
+  /** 选一个不会被正文里已有的反引号提前闭合的围栏标记（至少 3 个反引号）。 */
+  function fenceFor(text) {
+    let max = 2;
+    const runs = String(text || "").match(/`+/g);
+    if (runs) for (const run of runs) if (run.length > max) max = run.length;
+    return "`".repeat(max + 1);
+  }
+
   function repairPrompt(receipt, repairedHtml) {
     const lines = [];
     const all = (receipt.errors || []).concat(receipt.warnings || []);
@@ -406,7 +895,10 @@ var RULESET_VERSION = 4;
     }
     let out = "请修复以下 dsh-html 围栏问题并重新输出完整围栏（写在回答正文，不要写在思考块里）：\n" + lines.join("\n");
     if (typeof repairedHtml === "string" && repairedHtml) {
-      out += "\n\n也可以直接采用下面这份已修复的源码（原样粘贴进围栏即可）：\n```html\n" + repairedHtml + "\n```";
+      // 围栏长度必须大于正文里最长的反引号串：否则正文里的一行 ``` 会提前闭合代码块，
+      // 后续文本掉出代码块（实测修复版里带 ``` 时会出现三条围栏行）。
+      const fence = fenceFor(repairedHtml);
+      out += "\n\n也可以直接采用下面这份已修复的源码（原样粘贴进围栏即可）：\n" + fence + "html\n" + repairedHtml + "\n" + fence;
     }
     return out;
   }
@@ -735,8 +1227,16 @@ var RULESET_VERSION = 4;
     function wrapDocument(raw, katexCss, mid, tab) {
       var headExtra = katexCss ? "<style>" + katexCss + "</style>" : "";
       var pal = currentPalette();
-      return '<!doctype html><html><head><meta charset="utf-8">' + buildCsp(config.allowRemoteImages, tab) + headExtra + '</head><body style="margin:4px 6px;color-scheme:light dark;background:' + pal.bg + ";color:" + pal.fg + ';">' + raw + /* alert/confirm/prompt → 页内 toast（保留旧版实现） */
+      var inner = '<!doctype html><html><head><meta charset="utf-8">' + buildCsp(config.allowRemoteImages) + headExtra + '</head><body style="margin:4px 6px;color-scheme:light dark;background:' + pal.bg + ";color:" + pal.fg + ';">' + raw + /* alert/confirm/prompt → 页内 toast（保留旧版实现） */
       '<script>try{(function(){function toast(m){var d=document.createElement("div");d.style.cssText="position:fixed;right:12px;bottom:12px;z-index:2147483647;background:rgba(30,41,59,.96);color:#e2e8f0;border-radius:8px;padding:8px 14px;font:12px/1.5 system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);max-width:80%;pointer-events:none";d.textContent=m;document.body.appendChild(d);setTimeout(function(){d.remove()},2600)}window.alert=function(m){toast("[alert] "+m)};window.confirm=function(){toast("[confirm] \u88AB\u6C99\u7BB1\u963B\u65AD\uFF0C\u5DF2\u6309\u201C\u786E\u5B9A\u201D\u8FD4\u56DE false");return false};window.prompt=function(){toast("[prompt] \u88AB\u6C99\u7BB1\u963B\u65AD");return null}})()}catch(e){}<\/script>' + helperScript(mid == null ? 0 : mid) + "</body></html>";
+      if (!tab) return inner;
+      // 新标签/导出曾经直接把这个文档塞进 blob: URL 打开，并指望 meta 里的
+      // `sandbox allow-scripts` 沙箱化它——而 CSP 的 sandbox 指令在 <meta> 中被浏览器
+      // 直接忽略（MDN），blob: 文档又继承创建者源：模型 HTML 会以"应用同源 + 未沙箱"
+      // 身份运行（可读 localStorage/IndexedDB、可自我导航外发数据）。
+      // 改为外层静态壳（插件自有标记）+ 内层真正的 sandbox="allow-scripts" iframe(srcdoc)。
+      var escaped = inner.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      return '<!doctype html><html><head><meta charset="utf-8"><title>dsh-html-ui</title><style>html,body{margin:0;height:100%;background:' + pal.bg + '}iframe{border:0;width:100%;height:100vh;display:block}</style></head><body><iframe sandbox="allow-scripts" title="dsh-html-ui" srcdoc="' + escaped + '"></iframe></body></html>';
     }
     var STYLE_ID = "dsh-html-ui-style-v" + VERSION;
     var styleInjected = false;
@@ -831,6 +1331,12 @@ var RULESET_VERSION = 4;
       var raw = mount.raw;
       var pal = currentPalette();
       var key = fnv1a32(raw + "" + pal.bg + "" + pal.fg);
+      // 缓存键必须体现"这次结果是否已经过 KaTeX 增强"：只按 raw+配色做键时，KaTeX 尚未
+      // 就绪（脚本加载中或 onerror）那一次会把**未增强**的正文写进缓存，之后即使 KaTeX
+      // 可用，命中的仍是含原始 $$ 的旧正文（实测 hits:1 之后再也不会渲染公式）。
+      // 把状态位并入键即可自愈：状态一变，键就变。
+      var enrichOk = !config.latex || !hasLatex(raw) || katexState === "ok";
+      key += enrichOk ? ":e" : ":r";
       var cached = cacheGet(key);
       if (cached) {
         mount.lastBody = cached.body;
@@ -860,15 +1366,84 @@ var RULESET_VERSION = 4;
       opts = opts || {};
       if (opts.sourceOnly) {
         var c = doc.createElement("div");
-        c.className = "dsh-html-ui-wrap";
+        c.className = "dsh-html-ui-wrap dsh-html-ui-src-mode";
         var soUi = makeToolbar();
         soUi.lbl.textContent = dict.toolbar.sourceOnly;
         var warn = doc.createElement("div");
         warn.className = "dsh-html-ui-warn";
         warn.textContent = dict.oversized.warn;
+        // 源码必须真的显示出来：旧实现只挂告警条就把原块隐藏了，围栏内容在对话里
+        // 整个消失（"仅显示源码"名不副实），且工具栏按钮全哑（监听器在早返回之后才挂）。
+        var soPre = doc.createElement("pre");
+        soPre.className = "dsh-html-ui-src";
+        soPre.textContent = raw;
         c.appendChild(soUi.bar);
         c.appendChild(warn);
+        c.appendChild(soPre);
         block.after(c);
+        // 无 iframe：预览/重载不适用，隐藏；复制/下载/新标签保留并接线。
+        soUi.bSrc.style.display = "none";
+        soUi.bReload.style.display = "none";
+        soUi.bCopy.addEventListener("click", function() {
+          var done = function() {
+            soUi.bCopy.textContent = dict.toolbar.copied;
+            win.setTimeout(function() {
+              soUi.bCopy.textContent = dict.toolbar.copy;
+            }, 900);
+          };
+          var fail = function() {
+            soUi.bCopy.textContent = dict.toolbar.copyFailed;
+            win.setTimeout(function() {
+              soUi.bCopy.textContent = dict.toolbar.copy;
+            }, 1200);
+          };
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(raw).then(done, fail);
+              return;
+            }
+          } catch (e) {
+            dbg(e);
+          }
+          fail();
+        });
+        soUi.bDown.addEventListener("click", function() {
+          try {
+            var out = "<!doctype html>\n<!-- dsh-html-ui v" + VERSION + " self-contained export (source only) -->\n<script type=\"text/plain\" id=\"dsh-html-source\">" + raw.replace(/<\//g, "<\\/") + "<\/script>";
+            var url = win.URL.createObjectURL(new Blob([out], { type: "text/html;charset=utf-8" }));
+            var a = doc.createElement("a");
+            a.href = url;
+            a.download = "dsh-html-" + fnv1a32(raw).toString(16) + ".html";
+            doc.body.appendChild(a);
+            a.click();
+            a.remove();
+            win.setTimeout(function() {
+              try {
+                win.URL.revokeObjectURL(url);
+              } catch (e) {
+                dbg(e);
+              }
+            }, 1e4);
+          } catch (e) {
+            dbg(e);
+          }
+        });
+        soUi.bTab.addEventListener("click", function() {
+          try {
+            var tabDoc = wrapDocument(raw, null, 0, true);
+            var tabUrl = win.URL.createObjectURL(new Blob([tabDoc], { type: "text/html" }));
+            win.open(tabUrl, "_blank", "noopener");
+            win.setTimeout(function() {
+              try {
+                win.URL.revokeObjectURL(tabUrl);
+              } catch (e) {
+                dbg(e);
+              }
+            }, 3e5);
+          } catch (e) {
+            dbg(e);
+          }
+        });
         var soMount = {
           id: ++mountSeq,
           block,
@@ -899,7 +1474,8 @@ var RULESET_VERSION = 4;
         block.setAttribute("data-dsh-html-ui", "");
         return soMount;
       }
-      var diag = validateRaw(raw, config);
+      // 调用方（未标注代码块的接管路径）可能已经校验过同一份正文，直接复用其回执。
+      var diag = opts.receipt || validateRaw(raw, config);
       var metaInfo = parseMeta(raw);
       var metaTitle = metaInfo && metaInfo.found && metaInfo.value && typeof metaInfo.value.title === "string" ? metaInfo.value.title.trim().slice(0, 60) : "";
       var initialHeight = opts.height || block.offsetHeight || 180;
@@ -993,11 +1569,9 @@ var RULESET_VERSION = 4;
       });
       ui.bTab.addEventListener("click", function() {
         try {
-          var cssInline = "";
-          var pal = currentPalette();
-          cssInline += "background:" + pal.bg + ";color:" + pal.fg + ";";
+          // wrapDocument 已按 currentPalette() 写好配色；tab 模式下正文被关进
+          // srcdoc 里转义过，外层再改 <body style> 只会打空（旧代码在此重复注入，已删）。
           var docTab = wrapDocument(mount.lastBody || raw, mount.lastCss || null, mount.id, true);
-          docTab = docTab.replace(/<body style="[^"]*"/, '<body style="' + cssInline + 'margin:4px 6px;color-scheme:light dark;"');
           var url = win.URL.createObjectURL(new Blob([docTab], { type: "text/html" }));
           win.open(url, "_blank", "noopener");
           win.setTimeout(function() {
@@ -1181,15 +1755,14 @@ var RULESET_VERSION = 4;
         container.insertBefore(bar, view);
       }
       refreshDiag();
+      // iframe 对 srcdoc 加载失败并不触发 error（旧处理器是死代码），一旦真触发，
+      // 旧写法只把原块放回来、wrap+iframe 仍在 DOM 里 —— 同一个围栏显示两遍且每次事件
+      // 追加一个告警节点。改为整块卸载 + 计数（与其它失败路径一致）。
       frame.addEventListener("error", function() {
         errCount++;
         try {
-          frame.style.display = "none";
-          block.style.display = "";
-          var warn2 = doc.createElement("div");
-          warn2.className = "dsh-html-ui-warn";
-          warn2.textContent = dict.error.loadFailed;
-          view.appendChild(warn2);
+          mounts.delete(block);
+          mount.unmount();
         } catch (e) {
           dbg(e);
         }
@@ -1246,7 +1819,7 @@ var RULESET_VERSION = 4;
       heightQueue.set(rec.id != null ? rec.id : rec, { rec, h, trunc });
       if (heightRaf === null) heightRaf = win.requestAnimationFrame(flushHeights);
     }
-    win.addEventListener("message", function(ev) {
+    function onHostMessage(ev) {
       var d = ev && ev.data;
       if (!d) return;
       if (d.kind === "dsh-html-ui-height") {
@@ -1255,8 +1828,11 @@ var RULESET_VERSION = 4;
         if (!rec || !rec.iframe || rec.iframe.contentWindow !== ev.source) return;
         queueHeight(rec, clampHeight(d.h, config.maxHeight), typeof d.full === "number" ? d.full > config.maxHeight : false);
       }
-    });
+    }
+    win.addEventListener("message", onHostMessage);
     var themeObserver = null;
+    var schemeMedia = null;
+    var onSchemeChange = null;
     function invalidateTheme() {
       paletteCache.t = 0;
       for (var m of mounts.values()) {
@@ -1271,12 +1847,12 @@ var RULESET_VERSION = 4;
     }
     function setupThemeFollow() {
       try {
-        var mq = win.matchMedia("(prefers-color-scheme: dark)");
-        var onScheme = function() {
+        schemeMedia = win.matchMedia("(prefers-color-scheme: dark)");
+        onSchemeChange = function() {
           invalidateTheme();
         };
-        if (mq.addEventListener) mq.addEventListener("change", onScheme);
-        else if (mq.addListener) mq.addListener(onScheme);
+        if (schemeMedia.addEventListener) schemeMedia.addEventListener("change", onSchemeChange);
+        else if (schemeMedia.addListener) schemeMedia.addListener(onSchemeChange);
       } catch (e) {
         dbg(e);
       }
@@ -1337,7 +1913,15 @@ var RULESET_VERSION = 4;
       setLocale: function(l) {
         dict = l || LOCALES.zh;
       },
-      setTheme: function() {
+      setTheme: function(p) {
+        // 接入宿主 --dsw-alias-* 令牌（wrapper 已从 theme.getTheme() 取好 bg/fg）。
+        // 旧实现丢弃实参，主题只能靠 getComputedStyle 扫描跟随，令牌契约形同虚设。
+        if (p && (p.bg || p.fg)) {
+          var fixed = p;
+          themeProvider = function() {
+            return fixed;
+          };
+        }
         invalidateTheme();
       },
       setAssetsBase: function(b) {
@@ -1352,6 +1936,18 @@ var RULESET_VERSION = 4;
             themeObserver.disconnect();
           } catch (e) {
           }
+        }
+        // 宿主监听器随 disable 摘除：插件重载时旧闭包不再累积。
+        try {
+          win.removeEventListener("message", onHostMessage);
+        } catch (e) {
+        }
+        try {
+          if (schemeMedia && onSchemeChange) {
+            if (schemeMedia.removeEventListener) schemeMedia.removeEventListener("change", onSchemeChange);
+            else if (schemeMedia.removeListener) schemeMedia.removeListener(onSchemeChange);
+          }
+        } catch (e) {
         }
         if (heightRaf !== null) win.cancelAnimationFrame(heightRaf);
         for (var entry of mounts.values()) {
@@ -1388,13 +1984,27 @@ var RULESET_VERSION = 4;
   var STREAMING = "[data-streaming]";
   var SWEEP_MS = 1e3;
   var SWEEP_MS_SLOW = 4e3;
+  /** 连续多少次"无变化"轮询后停表（等 MO/IO 唤醒）；约 15s 静默后进入零轮询空闲。 */
+  var QUIET_SWEEPS_STOP = 6;
   var SURFACE_HOPS = 4;
+  /** 每隔多少次 tick 做一次全文档兜底扫描（其余 tick 只处理 DOM 变更标记过的块）。 */
+  var FULL_SWEEP_EVERY = 4;
+  /** labelTextOf 的有界 DFS 访问上限（文本横幅总在开头；超出即视为无标签）。 */
+  var LABEL_SCAN_LIMIT = 400;
+  /** 同一挂载点两次"正文变更比对"之间的最小间隔（毫秒）：把 rAF 级的 O(子树) 读取摊薄。 */
+  var RAW_RECHECK_MS = 500;
   var BLOCK_CONTENT_SELECTOR = "p, ul, ol, dl, table, h1, h2, h3, h4, h5, h6, blockquote, hr, img, figure";
   function installScheduler(kernel, options = {}) {
     var win = options.window || window;
     var doc = options.document || win.document;
     var config = kernel.config || {};
     var getLabel = options.getLabel || labelTextOf;
+    // 调度节奏全部走 options：默认值即线上行为，测试可以注入确定性数值。
+    var sweepMs = options.sweepMs || SWEEP_MS;
+    var sweepMsSlow = options.sweepMsSlow || SWEEP_MS_SLOW;
+    var quietSweepsStop = options.quietSweepsStop || QUIET_SWEEPS_STOP;
+    var fullSweepEvery = options.fullSweepEvery || FULL_SWEEP_EVERY;
+    var rawRecheckMs = options.rawRecheckMs || RAW_RECHECK_MS;
     var mounts = /* @__PURE__ */ new Map();
     var changedBlocks = /* @__PURE__ */ new Set();
     var settleState = /* @__PURE__ */ new Map();
@@ -1406,6 +2016,9 @@ var RULESET_VERSION = 4;
     var inferredCount = 0;
     var quietSweeps = 0;
     var sweepActive = false;
+    /** 自上次全文档扫描以来 DOM 是否变过（由 MutationObserver 经 schedule() 置位）。 */
+    var domDirty = true;
+    var tickCount = 0;
     function rawOf(block) {
       var pre = block.querySelector("pre");
       if (!pre) return "";
@@ -1413,13 +2026,29 @@ var RULESET_VERSION = 4;
       for (var i = 0; i < pre.childNodes.length; i++) text += pre.childNodes[i].textContent || "";
       return text;
     }
+    /**
+     * 取第一个"不在 <pre> 里的叶子元素"文本作为语言标签。
+     *
+     * 旧实现 `block.querySelectorAll("*")` 会把整棵子树物化成数组：实测在 5k 节点的祖先上
+     * 0.88 ms/次，而结构判定只要 0.008 ms —— 相差 9~100×，且因为不再提前 break，
+     * 12 个裸 <pre> 的扫描从 5.80 ms 涨到 23.29 ms。改为"有界 DFS"：文本横幅总在开头，
+     * 访问到 LABEL_SCAN_LIMIT 个元素就放弃（返回空 = 视为无标签）。
+     */
     function labelTextOf(block) {
       var pre = block.querySelector("pre");
-      var els = block.querySelectorAll("*");
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i];
-        if (el.childElementCount !== 0) continue;
-        if (pre && pre.contains(el)) continue;
+      var stack = [];
+      var kids = block.children;
+      for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      var visited = 0;
+      while (stack.length > 0 && visited < LABEL_SCAN_LIMIT) {
+        var el = stack.pop();
+        visited++;
+        if (pre && (el === pre || pre.contains(el))) continue;
+        if (el.childElementCount !== 0) {
+          var cs = el.children;
+          for (var j = cs.length - 1; j >= 0; j--) stack.push(cs[j]);
+          continue;
+        }
         return el.textContent || "";
       }
       return "";
@@ -1466,9 +2095,11 @@ var RULESET_VERSION = 4;
         if (pre.closest && pre.closest(CODE_SELECTORS)) continue;
         var el2 = pre.parentElement;
         for (var hops = 0; el2 && hops < SURFACE_HOPS; hops++, el2 = el2.parentElement) {
+          // 顺序很关键：结构判定便宜且失败即 break（实测同一 DOM：先结构 5.80 ms，
+          // 先标签 23.29 ms —— 后者会把 body/html 也拉进标签扫描）。
           if (!isPlausibleFenceSurface(el2)) break;
           var lbl = labelTextOf(el2);
-          if (lbl !== "html" && lbl !== "dsh-html" && lbl !== "html-render") continue;
+          if (!isHtmlMarkerLabel(lbl)) continue;
           if (seen.has(el2)) continue;
           seen.add(el2);
           out.push(el2);
@@ -1487,17 +2118,21 @@ var RULESET_VERSION = 4;
         for (var hops = 0; cur && hops < SURFACE_HOPS; hops++, cur = cur.parentElement) {
           if (!isPlausibleFenceSurface(cur)) continue;
           var lbl = labelTextOf(cur);
-          if (lbl === "html" || lbl === "dsh-html" || lbl === "html-render") return cur;
+          if (isHtmlMarkerLabel(lbl)) return cur;
         }
       }
       return null;
     }
-    function isClosed(block, state) {
+    /**
+     * 定稿判定。`rawText` 可选：调用方已经读过正文时直接传进来，
+     * 避免流式路径上对同一块文本重复做 O(N) 提取（哈希只需要这一次读取）。
+     */
+    function isClosed(block, state, rawText) {
       var next = block.nextElementSibling;
       if (next && isVisibleContentBlock(next)) return { closed: true, via: "next-block" };
       var streaming = block.closest(STREAMING);
       if (!streaming) return { closed: true, via: "streaming-gone" };
-      var hash = fnv1a32(rawOf(block));
+      var hash = fnv1a32(rawText === void 0 ? rawOf(block) : rawText);
       if (!state) state = { lastHash: hash, noChangeStreak: 0, charDirty: true };
       if (state.charDirty) {
         state.charDirty = false;
@@ -1514,15 +2149,19 @@ var RULESET_VERSION = 4;
       }
       return { closed: false, via: "streaming", state };
     }
-    function takeOver(block, raw) {
+    function takeOver(block, raw, receipt) {
       if (mounts.has(block)) return;
       if (raw.length > config.maxBytes) {
-        kernel.mountBlock(block, raw, { height: block.offsetHeight, sourceOnly: true });
-        mounts.set(block, true);
+        // 存真正的 mount（旧实现存 true）：否则 repairSurgery 取不到 container，
+        // 每轮 sweep 都会把这块当"容器失联"重新挂载一次，DOM 无限增长。
+        var soMount = kernel.mountBlock(block, raw, { height: block.offsetHeight, sourceOnly: true, receipt: receipt });
+        if (soMount) mounts.set(block, soMount);
         return;
       }
       var h = block.offsetHeight || 180;
-      var mount = kernel.mountBlock(block, raw, { height: h });
+      // receipt 透传：未标注代码块的接管路径已经校验过一次，没必要对同一份正文再验一遍
+      // （实测 1MB 正文重复校验 = 白烧 23.7 ms）。
+      var mount = kernel.mountBlock(block, raw, { height: h, receipt: receipt });
       if (!mount) {
         console.warn("[dsh-html-ui] \u56F4\u680F\u63A5\u7BA1\u5931\u8D25\uFF0C\u4FDD\u7559\u539F\u751F\u4EE3\u7801\u5757\u3002");
         return;
@@ -1542,6 +2181,17 @@ var RULESET_VERSION = 4;
         return;
       }
       if (!isAssistantRow(block)) return;
+      // 正文只取一次：旧顺序里 rawOf 被调两遍（白名单探针一遍、挂载一遍），
+      // isClosed 内部还会再算一次哈希 —— 流式期间每次字符变更都要重读整块文本。
+      var raw = rawOf(block);
+      if (raw.trim() === "") return;
+      // 结算门槛提到最前：未定稿的块直接返回，不再为它跑 O(N) 的白名单校验。
+      // （流式中的大代码块此前每次变更都要整篇 validateRaw 一次，纯属白烧 CPU。）
+      var state = settleState.get(block);
+      var verdict = isClosed(block, state, raw);
+      if (state) settleState.set(block, verdict.state || state);
+      if (!verdict.closed) return;
+      settleState.delete(block);
       var label = getLabel(block);
       if (!wantsTakeoverRaw(label, "", config)) {
         // v4：白名单式内容回退（借鉴 dsh-genui isGenericGenuiFence）——只放行
@@ -1551,18 +2201,15 @@ var RULESET_VERSION = 4;
         var lbl0 = labelTextOf(block).trim().toLowerCase();
         var GENERIC_LABELS = { code: 1, "code block": 1, "\u4ee3\u7801\u5757": 1 };
         if (!GENERIC_LABELS[lbl0]) return;
-        var probe = rawOf(block);
-        if (!validateRaw(probe, config).ok) return;
-        label = "html";
+        // 超限正文注定过不了校验（E-SIZE），先按长度短路，省掉整篇扫描。
+        if (raw.length > config.maxBytes) return;
+        var receipt = validateRaw(raw, config);
+        if (!receipt.ok) return;
         inferredCount++;
+        // 回执透传给 mountBlock：否则同一份正文会被连验两次（1MB 正文实测 2×23.7 ms）。
+        takeOver(block, raw, receipt);
+        return;
       }
-      var raw = rawOf(block);
-      if (raw.trim() === "") return;
-      var state = settleState.get(block);
-      var verdict = isClosed(block, state);
-      if (state) settleState.set(block, verdict.state || state);
-      if (!verdict.closed) return;
-      settleState.delete(block);
       takeOver(block, raw);
     }
     function repairSurgery(block) {
@@ -1576,6 +2223,26 @@ var RULESET_VERSION = 4;
       if (container && container.isConnected) {
         if (container.parentElement !== block.parentElement || container.previousElementSibling !== block) {
           block.after(container);
+        }
+        // 正文变更检测：mount.raw 只在挂载时抓一次，宿主原地重渲染/流式收尾后
+        // iframe、源码视图、复制、下载、修复提示都会停在半截快照上（lastRaw 本为此存在）。
+        //
+        // 但"每轮 sweep 都读一遍正文"太贵：实测 `textContent.length` 仍是 O(子树) 且会
+        // 分配整条字符串（2 万节点挂载点 1.83 ms，40 个挂载点每帧 2.93 ms）。改为按时间摊薄：
+        // 同一挂载点最多每 RAW_RECHECK_MS 做一次完整比对，其余轮次直接跳过。
+        // 超限（sourceOnly）挂载不参与——它们不重渲染，正文还可能是 MB 级。
+        if (m.oversized !== true) {
+          var now = Date.now();
+          if (m._rawCheckedAt === void 0) {
+            m._rawCheckedAt = now;
+          } else if (now - m._rawCheckedAt >= rawRecheckMs) {
+            m._rawCheckedAt = now;
+            var nowRaw = rawOf(block);
+            if (nowRaw.trim() !== "" && nowRaw !== m.lastRaw) {
+              unmountBlock(block); // 先释放旧 mount（含 liveFrames），否则每次重挂泄一份
+              takeOver(block, nowRaw);
+            }
+          }
         }
         return;
       }
@@ -1600,6 +2267,7 @@ var RULESET_VERSION = 4;
           try {
             processBlock(items[i]);
           } catch (e) {
+            kernel._dbg ? kernel._dbg(e) : 0;
           }
         }
       }
@@ -1621,8 +2289,19 @@ var RULESET_VERSION = 4;
         }
       }
     }
+    function ensurePolling() {
+      if (disposed || intervalId) return;
+      quietSweeps = 0;
+      intervalId = win.setTimeout(tick, SWEEP_MS);
+    }
+    function onVisibility() {
+      if (!disposed && doc.visibilityState !== "hidden") ensurePolling();
+    }
     function schedule() {
       sweepActive = true;
+      domDirty = true; // 有变更 → 让下一次 tick 做全文档兜底扫描
+      // 有动静就确保轮询在跑（停表后由这里唤醒）。
+      ensurePolling();
       if (disposed || rafId !== null) return;
       rafId = win.requestAnimationFrame(function() {
         rafId = null;
@@ -1719,25 +2398,52 @@ var RULESET_VERSION = 4;
       } catch (e) {
       }
       fullSweep();
-      function tick() {
-        if (disposed) return;
-        if (doc.visibilityState !== "hidden") {
-          fullSweep();
-          if (sweepActive) {
-            sweepActive = false;
-            quietSweeps = 0;
-          } else if (quietSweeps < 6) {
-            quietSweeps++;
-          }
-        }
-        intervalId = win.setTimeout(tick, quietSweeps >= 3 ? SWEEP_MS_SLOW : SWEEP_MS);
+      ensurePolling();
+      try {
+        doc.addEventListener("visibilitychange", onVisibility);
+      } catch (e) {
       }
-      intervalId = win.setTimeout(tick, SWEEP_MS);
+    }
+    /**
+     * 轮询的一次 tick。必须与 ensurePolling/schedule 同层：它们是互相唤醒的关系，
+     * 把 tick 嵌在 start() 里会让 ensurePolling 抛 `tick is not defined` —— 那会让
+     * installScheduler 直接抛错、客户端 entry 激活失败（表现为
+     * "web boot: 1 entry did not activate / dsh-html-ui: failed"）。
+     */
+    function tick() {
+      intervalId = null;
+      if (disposed) return;
+      if (doc.visibilityState !== "hidden") {
+        tickCount++;
+        // 全文档扫描是兜底，不是主路径：MutationObserver 已经指出具体变更块，
+        // 所以只在"自上次扫描后有 DOM 变更"或每 fullSweepEvery 次 tick 时做一次；
+        // 其余 tick 只跑 sweep()（只遍历已挂载块 + 变更集合，与文档规模无关）。
+        if (domDirty || tickCount % fullSweepEvery === 0) {
+          domDirty = false;
+          fullSweep();
+        } else {
+          sweep();
+        }
+        if (sweepActive) {
+          sweepActive = false;
+          quietSweeps = 0;
+        } else if (quietSweeps < quietSweepsStop) {
+          quietSweeps++;
+        }
+      }
+      // 长时间无变化就停表（文档承诺"零 CPU 空闲"）：MutationObserver /
+      // IntersectionObserver 一旦有动静会经 schedule() 重新起表，可见性恢复也会重启。
+      if (quietSweeps >= quietSweepsStop) return;
+      intervalId = win.setTimeout(tick, quietSweeps >= 3 ? sweepMsSlow : sweepMs);
     }
     function dispose() {
       if (disposed) return;
       disposed = true;
       if (mo) mo.disconnect();
+      try {
+        doc.removeEventListener("visibilitychange", onVisibility);
+      } catch (e) {
+      }
       if (intervalId) win.clearTimeout(intervalId);
       if (rafId !== null) win.cancelAnimationFrame(rafId);
       for (var b of Array.from(mounts.keys())) {
@@ -1827,9 +2533,21 @@ var RULESET_VERSION = 4;
                 localeSvc.register("dsh-html-ui", { zh: LOCALES.zh, en: LOCALES.en });
               } catch (e) {
               }
+              // locale.getLocale() 返回的是快照对象 { active, locales, revision }，不是语言字符串：
+              // 旧写法 `cur.indexOf("en")` 在对象上直接抛 TypeError（被 catch 吞掉），
+              // 于是英文界面下渲染器的工具栏/诊断条永远停在中文。改成读 snapshot.active，
+              // 并订阅 locale/change，切换语言时即时跟随（旧实现只在注入那一刻看一次）。
+              var applyLocale = function(snap) {
+                var active = snap && typeof snap === "object" ? snap.active : snap;
+                if (typeof active === "string" && active.indexOf("en") === 0) kernel.setLocale(LOCALES.en);
+                else kernel.setLocale(LOCALES.zh);
+              };
               try {
-                var cur = localeSvc.getLocale && localeSvc.getLocale();
-                if (cur === "en" || cur && cur.indexOf("en") === 0) kernel.setLocale(LOCALES.en);
+                applyLocale(localeSvc.getLocale && localeSvc.getLocale());
+              } catch (e) {
+              }
+              try {
+                scope.on("locale/change", applyLocale);
               } catch (e) {
               }
             });
